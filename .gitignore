@@ -15,7 +15,7 @@ wheels/
 # Data directories
 data/raw
 data/processed
-birdclef2026
+birdclef-2026/
 
 # macOS
 .DS_Store
