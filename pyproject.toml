@@ -12,7 +12,14 @@ dependencies = [
     "lightgbm>=4.6.0",
     "numpy>=2.4.4",
     "pandas>=3.0.2",
+    "pip>=26.0.1",
     "scikit-learn>=1.8.0",
     "scipy>=1.17.1",
+    "seaborn>=0.13.2",
     "xgboost>=3.2.0",
 ]
+
+
+[tool.setuptools.packages.find]
+where = ["src"]
+

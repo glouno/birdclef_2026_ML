@@ -19,3 +19,6 @@ birdclef-2026/
 
 # macOS
 .DS_Store
+
+# uv
+uv.lock
