@@ -5,33 +5,8 @@ import geodatasets
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
-import ast
-import re
 
 from birdclef_2026_ml.constants import GEO_BBOX_EAST, GEO_BBOX_NORTH, GEO_BBOX_SOUTH, GEO_BBOX_WEST, SAMPLE_RATE
-
-
-def extract_datetime_from_soundscape_filename(filename):
-    match = re.search(r'_(\d{8})_(\d{6})\.ogg$', str(filename))
-    if not match:
-        return pd.NaT
-    dt_str = f"{match.group(1)} {match.group(2)}"
-    return pd.to_datetime(dt_str, format='%Y%m%d %H%M%S', errors='coerce')
-
-
-def train_map_to_nan(df):
-    def str_to_list(x):
-        return ast.literal_eval(x) if isinstance(x, str) else x
-
-    # String-lists to python lists
-    df["secondary_labels"] = df["secondary_labels"].apply(str_to_list)
-    df["type"] = df["type"].apply(str_to_list)
-
-    # Filling nans
-    df["rating"] = df["rating"].replace(0, np.nan)
-    df["author"] = df["author"].replace("Unknown", np.nan)
-    df["secondary_labels"] = df["secondary_labels"].apply(lambda x: np.nan if not x else x)
-    df["type"] = df["type"].apply(lambda x: np.nan if not x else x)
 
 
 def summarize_df(df):
