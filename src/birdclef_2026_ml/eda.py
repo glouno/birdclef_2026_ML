@@ -4,7 +4,19 @@ import geopandas as gpd
 import geodatasets
 import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
 import ast
+import re
+
+from birdclef_2026_ml.constants import GEO_BBOX_EAST, GEO_BBOX_NORTH, GEO_BBOX_SOUTH, GEO_BBOX_WEST
+
+
+def extract_datetime_from_soundscape_filename(filename):
+    match = re.search(r'_(\d{8})_(\d{6})\.ogg$', str(filename))
+    if not match:
+        return pd.NaT
+    dt_str = f"{match.group(1)} {match.group(2)}"
+    return pd.to_datetime(dt_str, format='%Y%m%d %H%M%S', errors='coerce')
 
 
 def train_map_to_nan(df):
@@ -17,6 +29,7 @@ def train_map_to_nan(df):
 
     # Filling nans
     df["rating"] = df["rating"].replace(0, np.nan)
+    df["author"] = df["author"].replace("Unknown", np.nan)
     df["secondary_labels"] = df["secondary_labels"].apply(lambda x: np.nan if not x else x)
     df["type"] = df["type"].apply(lambda x: np.nan if not x else x)
 
@@ -166,11 +179,29 @@ def plot_train_locations(df, hue_col=None):
             legend_kwds={'label': hue_col, 'shrink': 0.7}
         )
 
-    title = 'Recording locations'
+    bbox_left = GEO_BBOX_WEST
+    bbox_right = GEO_BBOX_EAST
+    bbox_top = GEO_BBOX_NORTH
+    bbox_bottom = GEO_BBOX_SOUTH
+
+    bbox = Rectangle(
+        (bbox_left, bbox_bottom),
+        bbox_right - bbox_left,
+        bbox_top - bbox_bottom,
+        fill=False,
+        edgecolor='crimson',
+        linewidth=2,
+        linestyle='--',
+        label='Recording location (soundscapes)'
+    )
+    ax.add_patch(bbox)
+
+    title = 'Recording locations (train)'
     if hue_col is not None:
         title += f' by {hue_col}'
 
     plt.title(title)
     plt.xlabel('Longitude')
     plt.ylabel('Latitude')
+    plt.legend()
     plt.tight_layout()
