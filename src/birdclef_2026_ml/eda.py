@@ -8,7 +8,7 @@ from matplotlib.patches import Rectangle
 import ast
 import re
 
-from birdclef_2026_ml.constants import GEO_BBOX_EAST, GEO_BBOX_NORTH, GEO_BBOX_SOUTH, GEO_BBOX_WEST
+from birdclef_2026_ml.constants import GEO_BBOX_EAST, GEO_BBOX_NORTH, GEO_BBOX_SOUTH, GEO_BBOX_WEST, SAMPLE_RATE
 
 
 def extract_datetime_from_soundscape_filename(filename):
@@ -67,7 +67,7 @@ def summarize_df(df):
 
 
 def plot_audio_overview_on_axes(path, train_audio_dir, axes, n_mfcc=13):
-    y, sr = librosa.load(train_audio_dir / path, sr=None)
+    y, sr = librosa.load(train_audio_dir / path, sr=SAMPLE_RATE)
 
     stft_db = librosa.amplitude_to_db(np.abs(librosa.stft(y)), ref=np.max)
     mel_db = librosa.power_to_db(librosa.feature.melspectrogram(y=y, sr=sr), ref=np.max)
