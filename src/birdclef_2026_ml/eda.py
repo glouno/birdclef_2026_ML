@@ -119,40 +119,80 @@ def plot_audio_overview_grid(
     plt.tight_layout()
 
 
-def plot_train_locations(df, hue_col=None):
-    columns = ['latitude', 'longitude']
+def plot_train_locations(df, hue_col=None, max_categories=20):
+    columns = ["latitude", "longitude"]
     if hue_col is not None:
+        if hue_col not in df.columns:
+            raise ValueError(f"Column '{hue_col}' not found in dataframe.")
         columns.append(hue_col)
 
     geo = df[columns].dropna(subset=columns)
+    if geo.empty:
+        raise ValueError("No rows with valid coordinates (and hue values if provided).")
+
     gdf = gpd.GeoDataFrame(
         geo,
         geometry=gpd.points_from_xy(geo.longitude, geo.latitude),
-        crs='EPSG:4326'
+        crs="EPSG:4326",
     )
 
-    world = gpd.read_file(geodatasets.get_path('naturalearth.land'))
+    world = gpd.read_file(geodatasets.get_path("naturalearth.land"))
 
-    print('Train rows with valid coordinates:', len(geo), '/', len(df))
-    print('Latitude range:', (geo['latitude'].min(), geo['latitude'].max()))
-    print('Longitude range:', (geo['longitude'].min(), geo['longitude'].max()))
+    print("Train rows with valid coordinates:", len(geo), "/", len(df))
+    print("Latitude range:", (geo["latitude"].min(), geo["latitude"].max()))
+    print("Longitude range:", (geo["longitude"].min(), geo["longitude"].max()))
 
     fig, ax = plt.subplots(figsize=(12, 7))
-    world.plot(ax=ax, color='lightgray', edgecolor='white')
+    world.plot(ax=ax, color="lightgray", edgecolor="white")
 
     if hue_col is None:
-        gdf.plot(ax=ax, markersize=3, alpha=0.6, color='steelblue')
+        gdf.plot(ax=ax, markersize=3, alpha=0.6, color="steelblue")
     else:
-        print(f'{hue_col} range:', (geo[hue_col].min(), geo[hue_col].max()))
-        gdf.plot(
-            ax=ax,
-            column=hue_col,
-            cmap='viridis',
-            markersize=3,
-            alpha=0.75,
-            legend=True,
-            legend_kwds={'label': hue_col, 'shrink': 0.7}
-        )
+        hue_values = geo[hue_col]
+
+        if pd.api.types.is_numeric_dtype(hue_values):
+            print(f"{hue_col} range:", (hue_values.min(), hue_values.max()))
+            gdf.plot(
+                ax=ax,
+                column=hue_col,
+                cmap="viridis",
+                markersize=3,
+                alpha=0.75,
+                legend=True,
+                legend_kwds={"label": hue_col, "shrink": 0.7},
+            )
+        else:
+            hue_cat = hue_values.astype("string")
+            n_categories = int(hue_cat.nunique(dropna=True))
+            print(f"{hue_col} categories:", n_categories)
+
+            if n_categories > max_categories:
+                top_cats = hue_cat.value_counts().nlargest(max_categories).index
+                hue_cat = hue_cat.where(hue_cat.isin(top_cats), other="Other")
+                print(
+                    f"Too many categories, grouped rare ones into 'Other' "
+                    f"(kept top {max_categories})."
+                )
+
+            # Order categories so minority classes appear first in the legend.
+            cat_counts = hue_cat.value_counts(dropna=True)
+            cat_order = cat_counts.sort_values(ascending=True).index.tolist()
+            hue_cat = pd.Categorical(hue_cat, categories=cat_order, ordered=True)
+
+            # Draw majority classes first so minority points remain visible on top.
+            gdf = gdf.assign(_hue_cat=hue_cat)
+            gdf = gdf.assign(_hue_count=pd.Series(hue_cat, index=gdf.index).astype("string").map(cat_counts))
+            gdf = gdf.sort_values("_hue_count", ascending=False)
+            gdf.plot(
+                ax=ax,
+                column="_hue_cat",
+                categorical=True,
+                # cmap="tab20",
+                markersize=6,
+                alpha=0.5,
+                legend=True,
+                legend_kwds={"title": hue_col, "loc": "upper left", "bbox_to_anchor": (1.02, 1.0)},
+            )
 
     bbox_left = GEO_BBOX_WEST
     bbox_right = GEO_BBOX_EAST
@@ -164,19 +204,23 @@ def plot_train_locations(df, hue_col=None):
         bbox_right - bbox_left,
         bbox_top - bbox_bottom,
         fill=False,
-        edgecolor='crimson',
+        edgecolor="crimson",
         linewidth=2,
-        linestyle='--',
-        label='Recording location (soundscapes)'
+        linestyle="--",
+        label="Recording location (soundscapes)",
     )
     ax.add_patch(bbox)
 
-    title = 'Recording locations (train)'
+    title = "Recording locations (train)"
     if hue_col is not None:
-        title += f' by {hue_col}'
+        title += f" by {hue_col}"
 
     plt.title(title)
-    plt.xlabel('Longitude')
-    plt.ylabel('Latitude')
-    plt.legend()
+    plt.xlabel("Longitude")
+    plt.ylabel("Latitude")
+
+    # Keep the rectangle legend entry for no-hue and numeric-hue cases.
+    if hue_col is None or pd.api.types.is_numeric_dtype(geo[hue_col]):
+        plt.legend()
+
     plt.tight_layout()
