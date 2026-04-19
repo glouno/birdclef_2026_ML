@@ -1,9 +1,11 @@
 import librosa
 from pathlib import Path
 import soundfile as sf
+import numpy as np
 
 from birdclef_2026_ml.constants import SAMPLE_RATE
 from birdclef_2026_ml.paths import PATHS
+from birdclef_2026_ml.configs import FeatureConfig
 
 
 def load_audio(filepath: str | Path, sr: int = SAMPLE_RATE):
@@ -59,3 +61,10 @@ def get_duration(filepath: str | Path, pathroot: str = "train_audio_dir"):
     audio_path = filepath if filepath.is_absolute() else get_path(pathroot, filepath)
     info = sf.info(audio_path)
     return float(info.duration)
+
+
+def audio_db_(y, cfg: FeatureConfig):
+    # Convert to dBFS (decibels relative to full scale)
+    rms = librosa.feature.rms(y=y, frame_length=cfg.n_fft, hop_length=cfg.hop_length)[0]
+    db = librosa.amplitude_to_db(rms, ref=1.0)
+    return db

@@ -6,12 +6,15 @@ from sklearn.base import clone
 from sklearn.preprocessing import LabelEncoder
 
 
+# Type aliases used throughout this module for readability.
 Array1D = np.ndarray
 Array2D = np.ndarray
 
 
 @dataclass
 class FamilySpeciesHead:
+    # Per-family species predictor used in hard approach 1.1.
+    # model=None is used when a family has exactly one species.
     model: Any | None
     class_ids: Array1D
     class_prior: Array1D
@@ -19,6 +22,7 @@ class FamilySpeciesHead:
 
 @dataclass
 class HardPerFamilyArtifacts:
+    # Trained state for hard approach 1.1.
     family_model: Any
     family_encoder: LabelEncoder
     species_encoder: LabelEncoder
@@ -28,6 +32,7 @@ class HardPerFamilyArtifacts:
 
 @dataclass
 class HardMaskedArtifacts:
+    # Trained state for hard approach 1.2 (family-conditioned masking).
     family_model: Any
     species_model: Any
     family_encoder: LabelEncoder
@@ -38,6 +43,7 @@ class HardMaskedArtifacts:
 
 @dataclass
 class SoftCombinationArtifacts:
+    # Trained state for soft approach.
     family_model: Any
     species_model: Any
     family_encoder: LabelEncoder
@@ -46,6 +52,7 @@ class SoftCombinationArtifacts:
 
 
 def _to_1d(a: Any) -> Array1D:
+    """Convert input to 1D ndarray and validate shape."""
     arr = np.asarray(a)
     if arr.ndim != 1:
         raise ValueError("Expected a 1D array-like input")
@@ -53,18 +60,25 @@ def _to_1d(a: Any) -> Array1D:
 
 
 def _validate_same_length(*arrays: Any) -> None:
+    """Guard against misaligned training inputs."""
     lengths = [len(x) for x in arrays]
     if len(set(lengths)) != 1:
         raise ValueError(f"Inputs must have same number of rows, got lengths={lengths}")
 
 
 def _fit_encoder(values: Any) -> LabelEncoder:
+    """Fit a label encoder on a 1D label vector."""
     encoder = LabelEncoder()
     encoder.fit(_to_1d(values))
     return encoder
 
 
 def _predict_proba_aligned(model: Any, x: Any, all_class_ids: Array1D) -> Array2D:
+    """Align predict_proba output to a global class-id ordering.
+
+    Some estimators only return probabilities for classes seen during fit.
+    This helper writes those probabilities into a full matrix with stable columns.
+    """
     proba = np.asarray(model.predict_proba(x), dtype=float)
     model_classes = np.asarray(model.classes_, dtype=int)
 
@@ -76,6 +90,7 @@ def _predict_proba_aligned(model: Any, x: Any, all_class_ids: Array1D) -> Array2
 
 
 def _softmax_with_neg_inf(scores: Array2D) -> Array2D:
+    """Softmax that treats -inf as masked classes with zero probability."""
     max_scores = np.max(scores, axis=1, keepdims=True)
     shifted = scores - max_scores
     exp_scores = np.exp(shifted)
@@ -86,6 +101,10 @@ def _softmax_with_neg_inf(scores: Array2D) -> Array2D:
 
 
 def _build_species_to_family_idx(y_family_enc: Array1D, y_species_enc: Array1D, n_species: int) -> Array1D:
+    """Build deterministic mapping: species_id -> family_id.
+
+    Raises if a species appears under multiple families.
+    """
     species_to_family = np.full(n_species, -1, dtype=int)
     for fam_id, sp_id in zip(y_family_enc, y_species_enc):
         prev = species_to_family[int(sp_id)]
@@ -101,8 +120,10 @@ def _build_species_to_family_idx(y_family_enc: Array1D, y_species_enc: Array1D, 
 
 
 def _predict_head_proba(head: FamilySpeciesHead, x: Any) -> Array2D:
+    """Predict species probabilities for one family-specific head."""
     n_samples = len(x)
     if head.model is None:
+        # Single-species family: emit prior (typically [1.0]) for each row.
         return np.tile(head.class_prior, (n_samples, 1))
 
     proba = np.asarray(head.model.predict_proba(x), dtype=float)
@@ -116,6 +137,10 @@ def _predict_head_proba(head: FamilySpeciesHead, x: Any) -> Array2D:
 
 
 def _scores_from_species_model(species_model: Any, x: Any) -> tuple[Array2D, Array1D]:
+    """Get comparable class scores from heterogeneous sklearn estimators.
+
+    Preference order: decision_function -> predict_log_proba -> log(predict_proba).
+    """
     classes = np.asarray(species_model.classes_, dtype=int)
 
     if hasattr(species_model, "decision_function"):
@@ -138,7 +163,7 @@ def train_hard_per_family_models(
         family_estimator: Any,
         species_estimator: Any,
 ) -> HardPerFamilyArtifacts:
-    """Hard approach 1.1: train one family model + one species model per family."""
+    """Hard approach 1.1: train 1 family model + 1 species model per family."""
     y_family = _to_1d(y_family)
     y_species = _to_1d(y_species)
     _validate_same_length(x, y_family, y_species)
@@ -161,6 +186,8 @@ def train_hard_per_family_models(
         class_prior = counts.astype(float) / counts.sum()
 
         if len(class_ids) == 1:
+            # Degenerate case: only one species in this family.
+            # We skip model fitting and keep a constant prior head.
             species_heads[family_id] = FamilySpeciesHead(
                 model=None,
                 class_ids=class_ids.astype(int),
@@ -192,7 +219,7 @@ def train_hard_per_family_models(
 
 
 def predict_proba_hard_per_family(artifacts: HardPerFamilyArtifacts, x: Any) -> Array2D:
-    """Predict species probabilities using hard family routing (argmax family)."""
+    """Hard approach 1.1 inference: route by argmax family, then predict species."""
     n_samples = len(x)
     n_species = len(artifacts.species_encoder.classes_)
 
@@ -212,6 +239,7 @@ def predict_proba_hard_per_family(artifacts: HardPerFamilyArtifacts, x: Any) -> 
 
 
 def predict_hard_per_family(artifacts: HardPerFamilyArtifacts, x: Any) -> Array1D:
+    """Return hard class predictions for approach 1.1."""
     proba = predict_proba_hard_per_family(artifacts, x)
     pred_ids = np.argmax(proba, axis=1)
     return artifacts.species_encoder.inverse_transform(pred_ids)
@@ -224,7 +252,7 @@ def train_hard_masked_models(
         family_estimator: Any,
         species_estimator: Any,
 ) -> HardMaskedArtifacts:
-    """Hard approach 1.2: family model + global species model with family mask at inference."""
+    """Hard approach 1.2: train family model + global species model."""
     y_family = _to_1d(y_family)
     y_species = _to_1d(y_species)
     _validate_same_length(x, y_family, y_species)
@@ -249,6 +277,7 @@ def train_hard_masked_models(
 
     n_families = len(family_encoder.classes_)
     n_species = len(species_encoder.classes_)
+    # mask[f, s] == True means species s is valid for family f.
     family_species_mask = np.zeros((n_families, n_species), dtype=bool)
     for species_id, family_id in enumerate(species_to_family_idx):
         family_species_mask[int(family_id), int(species_id)] = True
@@ -264,7 +293,7 @@ def train_hard_masked_models(
 
 
 def predict_proba_hard_masked(artifacts: HardMaskedArtifacts, x: Any) -> Array2D:
-    """Predict species probabilities by masking species scores with predicted family."""
+    """Hard approach 1.2 inference using family-conditioned species masking."""
     family_ids = np.argmax(artifacts.family_model.predict_proba(x), axis=1)
 
     raw_scores, species_classes = _scores_from_species_model(artifacts.species_model, x)
@@ -276,12 +305,14 @@ def predict_proba_hard_masked(artifacts: HardMaskedArtifacts, x: Any) -> Array2D
 
     for i in range(n_samples):
         family_mask = artifacts.family_species_mask[int(family_ids[i])]
+        # Force invalid species logits to -inf before softmax.
         full_scores[i, ~family_mask] = -np.inf
 
     return _softmax_with_neg_inf(full_scores)
 
 
 def predict_hard_masked(artifacts: HardMaskedArtifacts, x: Any) -> Array1D:
+    """Return hard class predictions for approach 1.2."""
     proba = predict_proba_hard_masked(artifacts, x)
     pred_ids = np.argmax(proba, axis=1)
     return artifacts.species_encoder.inverse_transform(pred_ids)
@@ -294,7 +325,7 @@ def train_soft_combination_models(
         family_estimator: Any,
         species_estimator: Any,
 ) -> SoftCombinationArtifacts:
-    """Soft approach: train one family model and one global species model."""
+    """Soft approach training: train one family model and one species model."""
     y_family = _to_1d(y_family)
     y_species = _to_1d(y_species)
     _validate_same_length(x, y_family, y_species)
@@ -331,7 +362,11 @@ def predict_proba_soft_combination(
         x: Any,
         renormalize: bool = True,
 ) -> Array2D:
-    """Compute P(species|x) = P(family_of_species|x) * P(species|x)."""
+    """Soft approach inference.
+
+    Computes:
+    P(species|x) <- P(species|x) * P(family_of_species|x)
+    """
     n_families = len(artifacts.family_encoder.classes_)
     all_family_ids = np.arange(n_families, dtype=int)
     family_proba = _predict_proba_aligned(artifacts.family_model, x, all_family_ids)
@@ -352,6 +387,7 @@ def predict_proba_soft_combination(
 
 
 def predict_soft_combination(artifacts: SoftCombinationArtifacts, x: Any) -> Array1D:
+    """Return hard class predictions for soft combination approach."""
     proba = predict_proba_soft_combination(artifacts, x)
     pred_ids = np.argmax(proba, axis=1)
     return artifacts.species_encoder.inverse_transform(pred_ids)

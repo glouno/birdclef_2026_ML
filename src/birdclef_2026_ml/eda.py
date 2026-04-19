@@ -44,26 +44,53 @@ def summarize_df(df):
 def plot_audio_overview_on_axes(path, train_audio_dir, axes, n_mfcc=13):
     y, sr = librosa.load(train_audio_dir / path, sr=SAMPLE_RATE)
 
-    stft_db = librosa.amplitude_to_db(np.abs(librosa.stft(y)), ref=np.max)
-    mel_db = librosa.power_to_db(librosa.feature.melspectrogram(y=y, sr=sr), ref=np.max)
+    stft_db = librosa.amplitude_to_db(np.abs(librosa.stft(y)), ref=1.0)
+    mel_db = librosa.power_to_db(librosa.feature.melspectrogram(y=y, sr=sr), ref=1.0)
     mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=n_mfcc)
+    # db_vmin, db_vmax = -80, 0
+    # mfcc_vmin, mfcc_vmax = np.percentile(mfcc, [1, 99])
 
     librosa.display.waveshow(y, sr=sr, ax=axes[0])
     axes[0].set_title('Waveform')
     axes[0].set_xlabel('Time')
     axes[0].set_ylabel('Amplitude')
 
-    img1 = librosa.display.specshow(stft_db, sr=sr, x_axis='time', y_axis='hz', ax=axes[1])
+    img1 = librosa.display.specshow(
+        stft_db,
+        sr=sr,
+        x_axis='time',
+        y_axis='hz',
+        ax=axes[1],
+        cmap='magma',
+        # vmin=db_vmin,
+        # vmax=db_vmax,
+    )
     axes[1].set_title('Spectrogram (dB)')
     fig1 = axes[1].figure
     fig1.colorbar(img1, ax=axes[1], format='%+2.0f dB')
 
-    img2 = librosa.display.specshow(mel_db, sr=sr, x_axis='time', y_axis='mel', ax=axes[2])
+    img2 = librosa.display.specshow(
+        mel_db,
+        sr=sr,
+        x_axis='time',
+        y_axis='mel',
+        ax=axes[2],
+        cmap='magma',
+        # vmin=db_vmin,
+        # vmax=db_vmax,
+    )
     axes[2].set_title('Mel Spectrogram (dB)')
     axes[2].set_ylabel('mels')
     fig1.colorbar(img2, ax=axes[2], format='%+2.0f dB')
 
-    img3 = librosa.display.specshow(mfcc, x_axis='time', ax=axes[3])
+    img3 = librosa.display.specshow(
+        mfcc,
+        x_axis='time',
+        ax=axes[3],
+        cmap='coolwarm',
+        # vmin=mfcc_vmin,
+        # vmax=mfcc_vmax,
+    )
     axes[3].set_title(f'MFCC (n_mfcc={n_mfcc})')
     fig1.colorbar(img3, ax=axes[3])
 
