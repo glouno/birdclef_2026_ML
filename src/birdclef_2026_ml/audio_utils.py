@@ -63,7 +63,7 @@ def get_duration(filepath: str | Path, pathroot: str = "train_audio_dir"):
     return float(info.duration)
 
 
-def audio_db_(y, cfg: FeatureConfig):
+def compute_rms_dbfs(y, cfg: FeatureConfig):
     # Convert to dBFS (decibels relative to full scale)
     rms = librosa.feature.rms(y=y, frame_length=cfg.n_fft, hop_length=cfg.hop_length)[0]
     db = librosa.amplitude_to_db(rms, ref=1.0)
