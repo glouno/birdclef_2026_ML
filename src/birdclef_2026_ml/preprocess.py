@@ -17,6 +17,7 @@ def _safe_literal_eval(x):
 def preprocess_train(df: pd.DataFrame) -> pd.DataFrame:
     """Preprocess before EDA"""
     df = df.copy()
+    df = df.drop_duplicates()
 
     # Parse stringified lists
     df["secondary_labels"] = df["secondary_labels"].apply(_safe_literal_eval)
@@ -41,6 +42,7 @@ def preprocess_soundscape(df: pd.DataFrame) -> pd.DataFrame:
     """Preprocess before EDA"""
 
     df = df.copy()
+    df = df.drop_duplicates()
 
     df["primary_label_list"] = df["primary_label"].str.split(";")
     df["primary_label_list"] = df["primary_label_list"].apply(
@@ -65,5 +67,13 @@ def preprocess_train_for_models(df: pd.DataFrame,
     df["duration"] = df["filename"].apply(get_duration)
     p5, p95 = np.percentile(df["duration"], [trim_percentile, 100 - trim_percentile])
     df = df[(df["duration"] > p5) & (df["duration"] < p95)]
+
+    return df
+
+
+def preprocess_soundscapes_for_models(df: pd.DataFrame) -> pd.DataFrame:
+    """Preprocessing after EDA"""
+
+    df = preprocess_soundscape(df)
 
     return df

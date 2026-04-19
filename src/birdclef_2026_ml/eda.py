@@ -4,8 +4,9 @@ import geopandas as gpd
 import geodatasets
 import pandas as pd
 import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
+from matplotlib.patches import Rectangle, Patch
 
+from birdclef_2026_ml.audio_utils import compute_rms_dbfs, select_silence_frames_from_rms_db
 from birdclef_2026_ml.constants import GEO_BBOX_EAST, GEO_BBOX_NORTH, GEO_BBOX_SOUTH, GEO_BBOX_WEST, SAMPLE_RATE
 
 
@@ -251,3 +252,183 @@ def plot_train_locations(df, hue_col=None, max_categories=20):
         plt.legend()
 
     plt.tight_layout()
+
+
+def _parse_primary_label_list(value):
+    if isinstance(value, list):
+        labels = value
+    elif pd.isna(value):
+        labels = []
+    else:
+        labels = str(value).split(";")
+
+    return [str(label).strip() for label in labels if str(label).strip()]
+
+
+def _to_seconds(value):
+    if pd.isna(value):
+        return np.nan
+
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        return float(value)
+
+    try:
+        return float(pd.to_timedelta(str(value)).total_seconds())
+    except Exception:
+        return np.nan
+
+
+def plot_soundscape_species_activity(
+    soundscapes,
+    taxonomy,
+    filename=None,
+    ax=None,
+    show_legend=True,
+    title=None,
+):
+    class_colors = {
+        "Aves": "#3B82F6",
+        "Mammalia": "#F97316",
+        "Amphibia": "#12843C",
+        "Reptilia": "#EF4444",
+        "Insecta": "#A855F7",
+    }
+
+    df = soundscapes.loc[soundscapes["filename"] == filename, ["start", "end", "primary_label_list"]].copy()
+    df["start_sec"] = pd.to_timedelta(df["start"]).dt.total_seconds()
+    df["duration"] = pd.to_timedelta(df["end"]).dt.total_seconds() - df["start_sec"]
+
+    events = (
+        df[["start_sec", "duration", "primary_label_list"]]
+        .explode("primary_label_list", ignore_index=True)
+        .rename(columns={"primary_label_list": "primary_label"})
+    )
+    events["primary_label"] = events["primary_label"].astype(str)
+
+    tax = taxonomy[["primary_label", "common_name", "class_name"]].copy()
+    tax["primary_label"] = tax["primary_label"].astype(str)
+    events = events.merge(tax, on="primary_label", how="left")
+
+    species_order_df = (
+        events.groupby(["primary_label", "common_name"], as_index=False)["start_sec"]
+        .min()
+        .sort_values(["start_sec", "primary_label"])
+    )
+    species_order = species_order_df["primary_label"].tolist()
+    species_labels = [
+        f"{row.primary_label} - {row.common_name}"
+        for row in species_order_df.itertuples(index=False)
+    ]
+
+    if ax is None:
+        fig_height = max(1.6, 0.24 * len(species_order) + 0.8)
+        _, ax = plt.subplots(figsize=(11, fig_height))
+
+    species_to_y = {label: idx for idx, label in enumerate(species_order)}
+    bar_height = 0.52
+
+    for primary_label, grp in events.groupby("primary_label", sort=False):
+        y = species_to_y[primary_label] - bar_height / 2
+        xranges = list(zip(grp["start_sec"].to_numpy(), grp["duration"].to_numpy()))
+        color = class_colors[grp["class_name"].iloc[0]]
+        ax.broken_barh(xranges, (y, bar_height), facecolors=color, edgecolors="none", alpha=0.9)
+
+    x_min = float(df["start_sec"].min())
+    x_max = float((df["start_sec"] + df["duration"]).max())
+    ax.set_xlim(x_min, x_max)
+    ax.set_ylim(-0.5, len(species_order) - 0.5)
+    ax.set_yticks(range(len(species_order)))
+    ax.set_yticklabels(species_labels, fontsize=8)
+
+    tick_step = 5 if (x_max - x_min) <= 300 else 30
+    ax.set_xticks(np.arange(np.floor(x_min / tick_step) * tick_step, x_max + tick_step, tick_step))
+
+    ax.grid(axis="x", alpha=0.2, linewidth=0.4)
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Species")
+    ax.set_title(title or f"Species activity timeline - {filename}", fontsize=10)
+
+    if show_legend:
+        present_classes = events["class_name"].drop_duplicates().tolist()
+        handles = [
+            Patch(facecolor=class_colors[class_name], edgecolor="none", label=class_name)
+            for class_name in class_colors
+            if class_name in present_classes
+        ]
+        ax.legend(
+            handles=handles,
+            title="Class",
+            loc="upper left",
+            bbox_to_anchor=(1.01, 1.0),
+            borderaxespad=0,
+            fontsize=8,
+            title_fontsize=9,
+            frameon=True,
+        )
+
+    return ax
+
+
+def plot_waveform_rms_db_with_silence(
+    y,
+    cfg,
+    silence_th=-40.0,
+    start_th=None,
+    stop_th=None,
+    axes=None,
+    figsize=(14, 7),
+):
+    """Plot waveform+normalized RMS (top) and RMS dB (bottom) with silence spans."""
+    rms, rms_db, times = compute_rms_dbfs(y, cfg)
+    silent_mask, silent_seconds, silence_segments = select_silence_frames_from_rms_db(
+        rms_db=rms_db,
+        times=times,
+        silence_th=silence_th,
+        start_th=start_th,
+        stop_th=stop_th,
+    )
+
+    created_fig = False
+    if axes is None:
+        fig, axes = plt.subplots(2, 1, figsize=figsize, sharex=True)
+        created_fig = True
+    else:
+        fig = axes[0].figure
+
+    waveform = y / (np.max(np.abs(y)))
+    rms_norm = rms / (np.max(rms))
+    t_wave = np.arange(len(y)) / cfg.sr
+
+    silence_str = ""
+    if start_th and stop_th:
+        silence_str = f"[{start_th:.2f}, {stop_th:.2f}] dB"
+    else:
+        silence_str = f"{silence_th:.2f} dB"
+
+    axes[0].plot(t_wave, waveform, color="steelblue", linewidth=0.8, alpha=0.8, label="Waveform (norm)")
+    axes[0].plot(times, rms_norm, color="crimson", linewidth=1.5, label="RMS (norm)")
+    axes[0].set_ylabel("Normalized amplitude")
+    axes[0].set_title("Waveform + RMS (normalized)")
+    axes[0].legend(loc="upper right")
+    axes[0].grid(alpha=0.2)
+
+    axes[1].plot(times, rms_db, color="black", linewidth=1.2, label="RMS (dB)")
+    if start_th is None or stop_th is None:
+        axes[1].axhline(silence_th, color="red", linestyle="--", linewidth=1.1, label=f"silence_th={silence_th:.1f} dB")
+    else:
+        axes[1].axhline(start_th, color="red", linestyle="--", linewidth=1.1, label=f"start_th={start_th:.1f} dB")
+        axes[1].axhline(stop_th, color="darkorange", linestyle="--", linewidth=1.1, label=f"stop_th={stop_th:.1f} dB")
+    axes[1].set_xlabel("Time (s)")
+    axes[1].set_ylabel("dB")
+    axes[1].set_title(f"RMS dB with silence threshold = {silence_str}")
+    axes[1].legend(loc="upper right")
+    axes[1].grid(alpha=0.2)
+
+    for start_s, end_s in silence_segments:
+        axes[0].axvspan(start_s, end_s, color="yellow", alpha=0.25)
+        axes[1].axvspan(start_s, end_s, color="yellow", alpha=0.25)
+
+    if created_fig:
+        fig.tight_layout()
+
+    return fig, axes, silent_seconds, silence_segments

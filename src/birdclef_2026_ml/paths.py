@@ -31,8 +31,8 @@ def get_paths(raw_data_root, proc_data_root):
         "train_audio_dir": raw_root / "train_audio",
 
         # soundscapes : metadata + audio
-        "raw_soundscape_labels": raw_root / "train_soundscapes_labels.csv",
-        "proc_soundscape_labels": proc_root / "train_soundscapes_labels.parquet",
+        "raw_soundscapes": raw_root / "train_soundscapes_labels.csv",
+        "proc_soundscapes": proc_root / "train_soundscapes_labels.parquet",
         "train_soundscapes_dir": raw_root / "train_soundscapes",
 
         # hierarchy

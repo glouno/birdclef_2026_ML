@@ -6,6 +6,7 @@ import pandas as pd
 from birdclef_2026_ml.paths import PATHS
 from birdclef_2026_ml.preprocess import (
     preprocess_train_for_models,
+    preprocess_soundscapes_for_models
 )
 
 
@@ -23,6 +24,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     # add_common_args(parser_train_models)
 
+    parser_soundscapes_models = subparsers.add_parser(
+        "preprocess-soundscapes-for-models",
+        help="Preprocess train_soundscapes_labels.csv for modeling",
+    )
+    # add_common_args(parser_soundscapes_models)
+
     return parser
 
 
@@ -32,6 +39,17 @@ def _run_preprocess_train_for_models(args) -> Path:
 
     df = pd.read_csv(input_path)
     out = preprocess_train_for_models(df)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    out.to_parquet(output_path, index=False)
+    return output_path
+
+
+def _run_preprocess_soundscapes_for_models(args) -> Path:
+    input_path = PATHS["raw_soundscapes"]
+    output_path = PATHS["proc_soundscapes"]
+
+    df = pd.read_csv(input_path)
+    out = preprocess_soundscapes_for_models(df)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     out.to_parquet(output_path, index=False)
     return output_path
@@ -47,6 +65,8 @@ def main(argv=None) -> int:
 
     if args.command == "preprocess-train-for-models":
         output_path = _run_preprocess_train_for_models(args)
+    elif args.command == "preprocess-soundscapes-for-models":
+        output_path = _run_preprocess_soundscapes_for_models(args)
     else:
         parser.error(f"Unknown command: {args.command}")
         return 2
