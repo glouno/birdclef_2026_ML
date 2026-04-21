@@ -52,7 +52,6 @@ def get_sliding_window_intervals(
         end = n_frames
         start = max(0, end - window_size)
         windows.append((start, end))
-    print("windows", windows, n_frames, step_size_s)
     return windows
 
 

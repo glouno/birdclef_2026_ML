@@ -7,7 +7,7 @@ from iterstrat.ml_stratifiers import MultilabelStratifiedShuffleSplit
 import pandas as pd
 
 
-def split_audio_train_val(df):
+def split_audio_train_val(df) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Split into train/validation, put rare (appear only once) labels into train"""
 
     vc = df["primary_label"].value_counts()
