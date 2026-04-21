@@ -17,6 +17,9 @@ data/raw
 data/processed
 birdclef-2026/
 
+# Models
+models/
+
 # macOS
 .DS_Store
 

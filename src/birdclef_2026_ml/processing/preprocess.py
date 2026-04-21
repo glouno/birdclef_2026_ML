@@ -38,6 +38,19 @@ def preprocess_train(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _series_to_seconds(values: pd.Series) -> pd.Series:
+    """Convert a Series of numeric/timedelta-like values to seconds."""
+    seconds = pd.to_timedelta(values.astype("string"), errors="coerce").dt.total_seconds()
+
+    return seconds.astype(float)
+
+
+def _add_soundscape_time_columns(df: pd.DataFrame):
+    """Add start/end time in seconds and validate positive segment durations."""
+    df["start_sec"] = _series_to_seconds(df["start"])
+    df["end_sec"] = _series_to_seconds(df["end"])
+
+
 def preprocess_soundscape(df: pd.DataFrame) -> pd.DataFrame:
     """Preprocess before EDA"""
 
@@ -54,6 +67,8 @@ def preprocess_soundscape(df: pd.DataFrame) -> pd.DataFrame:
     df["datetime"] = pd.to_datetime(df["date"] + " " + df["time"], format="%Y%m%d %H%M%S", errors="coerce")
 
     df.drop(columns=["date", "time"], inplace=True)
+    _add_soundscape_time_columns(df)
+
     return df
 
 

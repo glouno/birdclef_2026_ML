@@ -5,6 +5,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RAW_DATA_ROOT = PROJECT_ROOT / "data" / "raw"
 PROC_DATA_ROOT = PROJECT_ROOT / "data" / "processed"
+MODELS_ROOT = PROJECT_ROOT / "models"
 
 
 def _resolve_data_root(data_root):
@@ -41,6 +42,9 @@ def get_paths(raw_data_root, proc_data_root):
         # test dataset
         "test_soundscapes_dir": raw_root / "test_soundscapes",
         "sample_submission": raw_root / "sample_submission.csv",
+
+        "models": MODELS_ROOT,
+        "proc_train_matrix": proc_root / "matrices"
     }
 
 

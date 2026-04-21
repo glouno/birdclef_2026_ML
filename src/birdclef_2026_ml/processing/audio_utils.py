@@ -2,10 +2,10 @@ import librosa
 from pathlib import Path
 import soundfile as sf
 import numpy as np
+import pandas as pd
 
 from birdclef_2026_ml.constants import SAMPLE_RATE
 from birdclef_2026_ml.paths import PATHS
-from birdclef_2026_ml.configs import FeatureConfig
 
 
 def load_audio(filepath: str | Path, sr: int = SAMPLE_RATE):
@@ -52,8 +52,33 @@ def load_train_audio(
         pathroot=pathroot,
         filename_col=filename_col,
     )
-    y = load_audio(audio_path, sr=sr)
+    y = load_audio(audio_path, sr)
     return y, audio_path
+
+
+def load_soundscape_audio(
+    soundscapes,
+    idx: int,
+    pathroot: str = "train_soundscapes_dir",
+    filename_col: str = "filename",
+    start_col: str = "start_sec",
+    end_col: str = "end_sec",
+    sr: int = SAMPLE_RATE,
+):
+    row = soundscapes.iloc[idx]
+    audio_path = get_path(pathroot, row[filename_col])
+
+    offset_seconds = row[start_col]
+    end_seconds = row[end_col]
+    duration_seconds = end_seconds - offset_seconds
+
+    y, _ = librosa.load(
+        audio_path,
+        sr=sr,
+        offset=offset_seconds,
+        duration=duration_seconds,
+    )
+    return y, audio_path, offset_seconds, end_seconds
 
 
 def get_duration(filepath: str | Path, pathroot: str = "train_audio_dir"):
@@ -63,12 +88,12 @@ def get_duration(filepath: str | Path, pathroot: str = "train_audio_dir"):
     return float(info.duration)
 
 
-def compute_rms_dbfs(y, cfg: FeatureConfig):
+def compute_rms_dbfs(y, sr, frame_length, hop_length, ref_for_db):
     # Convert to dBFS (decibels relative to full scale)
     y = y / np.max(y)
-    rms = librosa.feature.rms(y=y, frame_length=cfg.n_fft, hop_length=cfg.hop_length)[0]
-    db = librosa.amplitude_to_db(rms, ref=1.0)
-    times = times = librosa.frames_to_time(np.arange(len(rms)), sr=cfg.sr, hop_length=cfg.hop_length)
+    rms = librosa.feature.rms(y=y, frame_length=frame_length, hop_length=hop_length)[0]
+    db = librosa.amplitude_to_db(rms, ref=ref_for_db)
+    times = times = librosa.frames_to_time(np.arange(len(rms)), sr=sr, hop_length=hop_length)
 
     return rms, db, times
 

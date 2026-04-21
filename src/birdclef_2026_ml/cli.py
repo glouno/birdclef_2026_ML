@@ -4,7 +4,7 @@ from pathlib import Path
 import pandas as pd
 
 from birdclef_2026_ml.paths import PATHS
-from birdclef_2026_ml.preprocess import (
+from birdclef_2026_ml.processing.preprocess import (
     preprocess_train_for_models,
     preprocess_soundscapes_for_models
 )

@@ -5,8 +5,9 @@ import geodatasets
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle, Patch
+import seaborn as sns
 
-from birdclef_2026_ml.audio_utils import compute_rms_dbfs, select_silence_frames_from_rms_db
+from birdclef_2026_ml.audio_utils import load_soundscape_audio, compute_rms_dbfs, select_silence_frames_from_rms_db
 from birdclef_2026_ml.constants import GEO_BBOX_EAST, GEO_BBOX_NORTH, GEO_BBOX_SOUTH, GEO_BBOX_WEST, SAMPLE_RATE
 
 
@@ -369,17 +370,87 @@ def plot_soundscape_species_activity(
     return ax
 
 
+def plot_soundscape_window_with_profiles(
+    soundscapes,
+    species_profiles,
+    filename,
+    start,
+    end,
+    sr=SAMPLE_RATE,
+    n_mels=128,
+    n_fft=1024,
+    hop_length=512,
+    figsize=(16, 9),
+    cmap="magma",
+):
+
+    df = soundscapes[(soundscapes["filename"] == filename) &
+                     (soundscapes["start_sec"] == start) &
+                     (soundscapes["end_sec"] == end)]
+    idx = df.index[0]
+
+    y, _, _, _ = load_soundscape_audio(soundscapes, idx)
+    mel = librosa.feature.melspectrogram(
+        y=y,
+        sr=sr,
+        n_mels=n_mels,
+        n_fft=n_fft,
+        hop_length=hop_length,
+    )
+    mel_db = librosa.power_to_db(mel, ref=1.0)
+
+    fig, axes = plt.subplots(2, 1, figsize=figsize)
+    ax_spec = axes[0]
+    ax_profiles = axes[1]
+
+    time_coords = librosa.frames_to_time(np.arange(mel_db.shape[1]), sr=sr, hop_length=hop_length) + start
+    spec_img = librosa.display.specshow(
+        mel_db,
+        x_coords=time_coords,
+        y_axis="mel",
+        sr=sr,
+        fmax=sr // 2,
+        cmap=cmap,
+        ax=ax_spec,
+    )
+    ax_spec.set_title(f"Mel spectrogram - {filename} [{start:.1f}s, {end:.1f}s]")
+    ax_spec.set_xlabel("Time (s)")
+    ax_spec.set_ylabel("Mel")
+    fig.colorbar(spec_img, ax=ax_spec, format="%+2.0f dB", pad=0.01)
+
+    profiles = species_profiles[species_profiles["primary_label"].isin(df["primary_label_list"].iloc[0])]
+    sns.lineplot(
+        data=profiles,
+        x="mel_frequencies",
+        y="species_profile",
+        hue="primary_label",
+        estimator=None,
+        sort=False,
+        linewidth=1.2,
+        alpha=0.9,
+        legend="brief",
+        ax=ax_profiles
+    )
+    ax_spec.set_xlabel("Frequency (Hz)")
+    ax_spec.set_ylabel("Energy (dB)")
+    ax_spec.set_title("Species Profile per Class")
+
+    return fig
+
+
 def plot_waveform_rms_db_with_silence(
     y,
     cfg,
     silence_th=-40.0,
     start_th=None,
     stop_th=None,
+    ref_for_db=1.0,
     axes=None,
     figsize=(14, 7),
 ):
     """Plot waveform+normalized RMS (top) and RMS dB (bottom) with silence spans."""
-    rms, rms_db, times = compute_rms_dbfs(y, cfg)
+    rms, rms_db, times = compute_rms_dbfs(y, sr=cfg.sr, frame_length=cfg.frame_length,
+                                          hop_length=cfg.hop_length, ref_for_db=ref_for_db)
     silent_mask, silent_seconds, silence_segments = select_silence_frames_from_rms_db(
         rms_db=rms_db,
         times=times,

@@ -1,4 +1,5 @@
 
+from typing import Optional
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -46,11 +47,15 @@ class PoolingConfig:
 
 @dataclass(frozen=False)
 class ChunkConfig:
-    n_chunks: int = 5
+    # n_chunks: int = 5
+    chunks_s: float = 5.0
+    overlap: float = 0.0  # seconds, must be >= 0 and < chunks_s
 
     def __post_init__(self):
-        if self.n_chunks <= 0:
-            raise ValueError("n_chunks must be > 0")
+        if self.chunks_s <= 0:
+            raise ValueError("chunks_s must be > 0")
+        if not (0.0 <= self.overlap < self.chunks_s):
+            raise ValueError("overlap must be >= 0 and < chunks_s")
 
 
 @dataclass(frozen=False)
@@ -59,3 +64,16 @@ class PipelineConfig:
     pooling: PoolingConfig = field(default_factory=PoolingConfig)
     chunk: ChunkConfig = field(default_factory=ChunkConfig)
     pooling_mode: Literal["global", "chunk"] = "global"
+
+
+@dataclass(frozen=False)
+class MILConfig:
+    window_size_s: float = 1.0  # seconds
+    step_size_s: float = 0.5    # seconds (overlap)
+    pooling: Literal["max", "mean", "logsumexp"] = "max"
+
+    def __post_init__(self):
+        if self.window_size_s <= 0 or self.step_size_s <= 0:
+            raise ValueError("window_size_s and step_size_s must be > 0")
+        if self.pooling not in ("max", "mean", "logsumexp"):
+            raise ValueError("Invalid pooling method for MILConfig")
