@@ -1,15 +1,21 @@
-import librosa
 from pathlib import Path
-import soundfile as sf
+
+import librosa
 import numpy as np
 import pandas as pd
+import soundfile as sf
 
 from birdclef_2026_ml.constants import SAMPLE_RATE
 from birdclef_2026_ml.paths import PATHS
 
 
-def load_audio(filepath: str | Path, sr: int = SAMPLE_RATE):
-    y, _ = librosa.load(filepath, sr=sr)
+def load_audio(
+    filepath: str | Path,
+    sr: int = SAMPLE_RATE,
+    offset: float = 0.0,
+    duration: float | None = None,
+):
+    y, _ = librosa.load(filepath, sr=sr, offset=offset, duration=duration)
     return y
 
 
@@ -72,8 +78,8 @@ def load_soundscape_audio(
     end_seconds = row[end_col]
     duration_seconds = end_seconds - offset_seconds
 
-    y, _ = librosa.load(
-        audio_path,
+    y = load_audio(
+        filepath=audio_path,
         sr=sr,
         offset=offset_seconds,
         duration=duration_seconds,
