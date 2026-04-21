@@ -3,7 +3,11 @@ import numpy as np
 from typing import Literal
 
 from birdclef_2026_ml.feature_engineering.configs import PoolingConfig, ChunkConfig, FeatureConfig
-from birdclef_2026_ml.feature_engineering.chunking import get_chunk_intervals, feature_frame_rate_hz
+from birdclef_2026_ml.feature_engineering.chunking import (
+    feature_frame_rate_hz,
+    # get_chunk_intervals,
+    get_sliding_window_intervals,
+)
 
 
 def _nan_skew(x: np.ndarray, axis: int = -1) -> np.ndarray:
@@ -63,13 +67,45 @@ def global_pool(feature_matrix: np.ndarray, pooling_cfg: PoolingConfig) -> np.nd
     return out
 
 
-def chunk_pool(
+# def chunk_pool(
+#     feature_matrix: np.ndarray,
+#     chunk_cfg: ChunkConfig,
+#     pooling_cfg: PoolingConfig,
+#     frame_rate_hz: float,
+# ) -> np.ndarray:
+#     """Pool features into fixed-duration, possibly overlapping chunks and return one row per chunk."""
+#     x = np.asarray(feature_matrix, dtype=float)
+#     if x.ndim == 1:
+#         x = x[np.newaxis, :]
+#     if x.ndim != 2:
+#         raise ValueError("feature_matrix must be 1D or 2D")
+
+#     n_frames = x.shape[1]
+#     if n_frames == 0:
+#         return np.array([], dtype=float)
+
+#     chunk_indices = get_chunk_intervals(n_frames, chunk_cfg.chunks_s, chunk_cfg.step_size_s, frame_rate_hz)
+
+#     chunks: list[np.ndarray] = []
+#     for start, end in chunk_indices:
+#         if end <= start:
+#             continue
+#         chunk_vec = global_pool(x[:, start:end], pooling_cfg)
+#         chunks.append(chunk_vec)
+
+#     if not chunks:
+#         return np.empty((0, 0), dtype=float)
+#     return np.vstack(chunks)
+
+
+def sliding_window_pool(
     feature_matrix: np.ndarray,
-    chunk_cfg: ChunkConfig,
     pooling_cfg: PoolingConfig,
+    window_size_s: float,
+    step_size_s: float,
     frame_rate_hz: float,
 ) -> np.ndarray:
-    """Pool features into fixed-duration, possibly overlapping chunks and return one row per chunk."""
+    """Pool features over arbitrary sliding windows and return one row per window."""
     x = np.asarray(feature_matrix, dtype=float)
     if x.ndim == 1:
         x = x[np.newaxis, :]
@@ -80,18 +116,22 @@ def chunk_pool(
     if n_frames == 0:
         return np.array([], dtype=float)
 
-    chunk_indices = get_chunk_intervals(n_frames, chunk_cfg.chunks_s, chunk_cfg.overlap, frame_rate_hz)
+    window_indices = get_sliding_window_intervals(
+        n_frames=n_frames,
+        window_size_s=window_size_s,
+        step_size_s=step_size_s,
+        frame_rate_hz=frame_rate_hz,
+    )
 
-    chunks: list[np.ndarray] = []
-    for start, end in chunk_indices:
+    windows: list[np.ndarray] = []
+    for start, end in window_indices:
         if end <= start:
             continue
-        chunk_vec = global_pool(x[:, start:end], pooling_cfg)
-        chunks.append(chunk_vec)
+        windows.append(global_pool(x[:, start:end], pooling_cfg))
 
-    if not chunks:
+    if not windows:
         return np.empty((0, 0), dtype=float)
-    return np.vstack(chunks)
+    return np.vstack(windows)
 
 
 def pool_feature_dict(
@@ -114,12 +154,34 @@ def pool_feature_dict(
             raise ValueError("chunk_cfg is required for chunk mode")
         for name, mat in features_dict.items():
             frame_rate_hz = feature_frame_rate_hz(name, feature_cfg.sr, feature_cfg.hop_length)
-            pooled[name] = chunk_pool(
+            pooled[name] = sliding_window_pool(
                 feature_matrix=mat,
-                chunk_cfg=chunk_cfg,
                 pooling_cfg=pooling_cfg,
+                window_size_s=chunk_cfg.chunk_size_s,
+                step_size_s=chunk_cfg.step_size_s,
                 frame_rate_hz=frame_rate_hz,
             )
         return pooled
 
     raise ValueError(f"Unsupported pooling mode: {mode}")
+
+
+def pool_feature_dict_sliding_windows(
+    features_dict: dict[str, np.ndarray],
+    pooling_cfg: PoolingConfig,
+    feature_cfg: FeatureConfig,
+    window_size_s: float,
+    step_size_s: float,
+) -> dict[str, np.ndarray]:
+    """Pool each feature matrix into sliding-window instances for MIL-style inputs."""
+    pooled: dict[str, np.ndarray] = {}
+    for name, mat in features_dict.items():
+        frame_rate_hz = feature_frame_rate_hz(name, feature_cfg.sr, feature_cfg.hop_length)
+        pooled[name] = sliding_window_pool(
+            feature_matrix=mat,
+            pooling_cfg=pooling_cfg,
+            window_size_s=window_size_s,
+            step_size_s=step_size_s,
+            frame_rate_hz=frame_rate_hz,
+        )
+    return pooled

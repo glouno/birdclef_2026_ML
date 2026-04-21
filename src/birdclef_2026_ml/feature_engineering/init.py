@@ -3,10 +3,11 @@ import librosa
 import numpy as np
 
 from birdclef_2026_ml.processing.audio_utils import build_audio_path, get_path, load_audio
-from birdclef_2026_ml.feature_engineering.configs import FeatureConfig, PoolingConfig, ChunkConfig
+from birdclef_2026_ml.feature_engineering.configs import ChunkConfig, FeatureConfig, MILConfig, PoolingConfig
 from birdclef_2026_ml.feature_engineering.utils import pad_short_audio, _percentile_label
 from birdclef_2026_ml.feature_engineering.feature_extract import extract_all_frame_features
-from birdclef_2026_ml.feature_engineering.pooling import pool_feature_dict
+from birdclef_2026_ml.feature_engineering.pooling import pool_feature_dict, pool_feature_dict_sliding_windows
+from birdclef_2026_ml.feature_engineering.chunking import get_sliding_window_intervals
 
 
 def get_feature_names(
@@ -133,6 +134,87 @@ def build_feature_vector(
             f"({feature_matrix.shape[1]} != {len(feature_names)})."
         )
 
+    return feature_matrix, feature_names
+
+
+def split_audio_into_chunks(
+    y: np.ndarray,
+    feature_cfg: FeatureConfig,
+    chunk_cfg: ChunkConfig,
+) -> list[np.ndarray]:
+    """Split audio into fixed-duration chunks using the shared chunking logic."""
+    y_arr = np.asarray(y, dtype=float).ravel()
+    if y_arr.size == 0:
+        return []
+
+    y_arr = pad_short_audio(y_arr, chunk_cfg, feature_cfg)
+    chunk_intervals = get_sliding_window_intervals(
+        n_frames=y_arr.shape[0],
+        window_size_s=chunk_cfg.chunk_size_s,
+        step_size_s=chunk_cfg.step_size_s,
+        frame_rate_hz=float(feature_cfg.sr),
+    )
+    return [y_arr[start:end] for start, end in chunk_intervals if end > start]
+
+
+def build_mil_feature_matrix(
+    y: np.ndarray,
+    feature_cfg: FeatureConfig,
+    pooling_cfg: PoolingConfig,
+    mil_cfg: MILConfig,
+) -> tuple[np.ndarray, list[str]]:
+    """Build one MIL bag from one chunk of audio."""
+    y_arr = np.asarray(y, dtype=float).ravel()
+    if y_arr.size == 0:
+        raise ValueError("y must contain at least one sample")
+
+    frame_features = extract_all_frame_features(y_arr, feature_cfg)
+    pooled = pool_feature_dict_sliding_windows(
+        features_dict=frame_features,
+        pooling_cfg=pooling_cfg,
+        feature_cfg=feature_cfg,
+        window_size_s=mil_cfg.window_size_s,
+        step_size_s=mil_cfg.step_size_s,
+    )
+    feature_names = get_feature_names(
+        features_dict=frame_features,
+        pooling_cfg=pooling_cfg,
+        pooling_mode="chunk",
+        feature_cfg=feature_cfg,
+        chunk_cfg=ChunkConfig(chunk_size_s=mil_cfg.window_size_s, step_size_s=mil_cfg.window_size_s),
+    )
+
+    window_mats: list[np.ndarray] = []
+    n_windows = 0
+    for pooled_mat in pooled.values():
+        mat = np.asarray(pooled_mat, dtype=float)
+        if mat.ndim == 1:
+            mat = mat[np.newaxis, :]
+        if mat.ndim != 2:
+            raise RuntimeError("MIL pooled feature must be 2D")
+        window_mats.append(mat)
+        n_windows = max(n_windows, mat.shape[0])
+
+    if not window_mats:
+        return np.empty((0, 0), dtype=float), feature_names
+
+    fill_value = float(pooling_cfg.nan_fill_value)
+    rows: list[np.ndarray] = []
+    for window_idx in range(n_windows):
+        row_parts: list[np.ndarray] = []
+        for mat in window_mats:
+            if window_idx < mat.shape[0]:
+                row_parts.append(mat[window_idx])
+            else:
+                row_parts.append(np.full(mat.shape[1], fill_value, dtype=float))
+        rows.append(np.concatenate(row_parts) if row_parts else np.array([], dtype=float))
+
+    feature_matrix = np.vstack(rows) if rows else np.empty((0, len(feature_names)), dtype=float)
+    if feature_matrix.shape[1] != len(feature_names):
+        raise RuntimeError(
+            "MIL feature matrix width and feature name count mismatch "
+            f"({feature_matrix.shape[1]} != {len(feature_names)})."
+        )
     return feature_matrix, feature_names
 
 

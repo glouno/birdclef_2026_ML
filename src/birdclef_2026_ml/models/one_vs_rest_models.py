@@ -20,7 +20,6 @@ from birdclef_2026_ml.models.mil_learning import (
     predict_mil_proba,
 )
 
-
 # Type aliases used throughout this module for readability.
 Array1D = np.ndarray
 Array2D = np.ndarray

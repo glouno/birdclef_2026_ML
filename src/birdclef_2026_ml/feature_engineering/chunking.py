@@ -22,35 +22,48 @@ def _chunk_step_in_frames(chunks_s, overlap, frame_rate_hz: float) -> int:
     return max(1, step)
 
 
-# def _n_chunks_from_time(n_frames: int, chunk_cfg: ChunkConfig, frame_rate_hz: float) -> int:
-#     if n_frames <= 0:
-#         return 0
-#     chunk_size_frames = _chunk_size_in_frames(chunk_cfg, frame_rate_hz)
-#     step_frames = _chunk_step_in_frames(chunk_cfg, frame_rate_hz)
-#     if n_frames < chunk_size_frames:
-#         return 1
-#     return 1 + max(0, (n_frames - chunk_size_frames) // step_frames)
+def _window_step_in_frames(step_size_s, frame_rate_hz: float) -> int:
+    if frame_rate_hz <= 0.0:
+        raise ValueError("frame_rate_hz must be > 0")
+    if step_size_s <= 0:
+        raise ValueError("step_size_s must be > 0")
+    return max(1, int(np.ceil(float(step_size_s) * frame_rate_hz)))
 
 
-def get_chunk_intervals(n_frames: int, chunks_s: float, overlap: float, frame_rate_hz: float) -> list[tuple[int, int]]:
-    """
-    Return a list of (start, end) frame indices for each chunk.
-    The last chunk always covers the last `chunks_s` duration, ignoring hop if necessary.
-    """
-    chunk_size = max(1, int(np.ceil(chunks_s * frame_rate_hz)))
-    step = max(1, int(np.ceil((chunks_s - overlap) * frame_rate_hz)))
-    if n_frames <= 0 or chunk_size > n_frames:
+def get_sliding_window_intervals(
+    n_frames: int,
+    window_size_s: float,
+    step_size_s: float,
+    frame_rate_hz: float,
+) -> list[tuple[int, int]]:
+    """Return sliding-window frame intervals for arbitrary window and step sizes."""
+    window_size = _chunk_size_in_frames(window_size_s, frame_rate_hz)
+    step = _window_step_in_frames(step_size_s, frame_rate_hz)
+    if n_frames <= 0 or window_size > n_frames:
         return [(0, n_frames)] if n_frames > 0 else []
 
-    chunks = []
+    windows: list[tuple[int, int]] = []
     start = 0
-    while start + chunk_size < n_frames:
-        end = start + chunk_size
-        chunks.append((start, end))
+    while start + window_size < n_frames:
+        end = start + window_size
+        windows.append((start, end))
         start += step
-    # Always add the last chunk to cover the last chunk_size frames
-    if not chunks or chunks[-1][1] < n_frames:
+    if not windows or windows[-1][1] < n_frames:
         end = n_frames
-        start = max(0, end - chunk_size)
-        chunks.append((start, end))
-    return chunks
+        start = max(0, end - window_size)
+        windows.append((start, end))
+    print("windows", windows, n_frames, step_size_s)
+    return windows
+
+
+# def get_chunk_intervals(n_frames: int, chunks_s: float, step_size_s: float, frame_rate_hz: float) -> list[tuple[int, int]]:
+#     """
+#     Return a list of (start, end) frame indices for each chunk.
+#     The last chunk always covers the last `chunks_s` duration, ignoring hop if necessary.
+#     """
+#     return get_sliding_window_intervals(
+#         n_frames=n_frames,
+#         window_size_s=chunks_s,
+#         step_size_s=step_size_s,
+#         frame_rate_hz=frame_rate_hz,
+#     )

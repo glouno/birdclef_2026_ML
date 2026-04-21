@@ -47,14 +47,12 @@ class PoolingConfig:
 
 @dataclass(frozen=False)
 class ChunkConfig:
-    chunks_s: float = 5.0
-    overlap: float = 0.0  # seconds, must be >= 0 and < chunks_s
+    chunk_size_s: float = 5.0     # seconds
+    step_size_s: float = 5.0  # seconds
 
     def __post_init__(self):
-        if self.chunks_s <= 0:
-            raise ValueError("chunks_s must be > 0")
-        if not (0.0 <= self.overlap < self.chunks_s):
-            raise ValueError("overlap must be >= 0 and < chunks_s")
+        if self.chunk_size_s <= 0 or self.step_size_s <= 0:
+            raise ValueError("chunks_s and step_size_s must be > 0")
 
 
 @dataclass(frozen=False)
@@ -68,7 +66,7 @@ class PipelineConfig:
 @dataclass(frozen=False)
 class MILConfig:
     window_size_s: float = 1.0  # seconds
-    step_size_s: float = 0.5    # seconds (overlap)
+    step_size_s: float = 0.5    # seconds
     pooling: Literal["max", "mean", "logsumexp"] = "max"
 
     def __post_init__(self):
