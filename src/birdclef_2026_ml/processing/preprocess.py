@@ -2,7 +2,7 @@ import ast
 import numpy as np
 import pandas as pd
 
-from birdclef_2026_ml.audio_utils import get_duration
+from birdclef_2026_ml.processing.audio_utils import get_duration
 
 
 def _safe_literal_eval(x):

@@ -6,12 +6,18 @@ from sklearn.base import clone
 from sklearn.multiclass import OneVsRestClassifier
 from sklearn.preprocessing import LabelEncoder
 
-from birdclef_2026_ml.hierarchical_models import (
+from birdclef_2026_ml.feature_engineering.configs import MILConfig
+from birdclef_2026_ml.models.hierarchical_models import (
     _fit_encoder,
     _predict_proba_aligned,
     _softmax_with_neg_inf,
     _to_1d,
     _validate_same_length,
+)
+from birdclef_2026_ml.models.mil_learning import (
+    _validate_mil_enabled,
+    flatten_mil_bags,
+    predict_mil_proba,
 )
 
 
@@ -26,6 +32,8 @@ class OneVsRestArtifacts:
 
     model: OneVsRestClassifier
     label_encoder: LabelEncoder
+    mil_mode: bool = False
+    mil_config: MILConfig | None = None
 
 
 @dataclass
@@ -67,28 +75,51 @@ def train_one_vs_rest_model(
         x: Any,
         y: Any,
         estimator: Any,
+        mil_mode: bool = False,
+        mil_config: MILConfig | None = None,
         n_jobs: int | None = None,
         verbose: int = 0,
 ) -> OneVsRestArtifacts:
     """Train one-vs-rest model for a single target vector."""
+    _validate_mil_enabled(mil_mode=mil_mode, mil_config=mil_config)
     y = _to_1d(y)
     _validate_same_length(x, y)
 
+    x_fit = x
+    y_fit = y
+    if mil_mode:
+        x_fit, y_fit, _ = flatten_mil_bags(x=x, y=y)
+
     label_encoder = _fit_encoder(y)
     y_enc = np.asarray(label_encoder.transform(y), dtype=int)
+    if mil_mode:
+        y_enc = np.asarray(label_encoder.transform(y_fit), dtype=int)
 
     model = OneVsRestClassifier(
         estimator=clone(estimator),
         n_jobs=n_jobs,
         verbose=verbose,
     )
-    model.fit(x, y_enc)
+    model.fit(x_fit, y_enc)
 
-    return OneVsRestArtifacts(model=model, label_encoder=label_encoder)
+    return OneVsRestArtifacts(
+        model=model,
+        label_encoder=label_encoder,
+        mil_mode=mil_mode,
+        mil_config=mil_config,
+    )
 
 
 def predict_proba_one_vs_rest(artifacts: OneVsRestArtifacts, x: Any) -> Array2D:
     """Predict class probabilities for single-target one-vs-rest."""
+    if artifacts.mil_mode:
+        if artifacts.mil_config is None:
+            raise ValueError("MIL artifacts require mil_config for prediction")
+        return predict_mil_proba(
+            predict_instance_proba_fn=lambda x_flat: _predict_proba_ovr(artifacts, x_flat),
+            x=x,
+            mil_cfg=artifacts.mil_config,
+        )
     return _predict_proba_ovr(artifacts, x)
 
 
@@ -105,6 +136,8 @@ def train_dual_one_vs_rest_models(
         y_primary_label: Any,
         class_name_estimator: Any,
         primary_label_estimator: Any | None = None,
+        mil_mode: bool = False,
+        mil_config: MILConfig | None = None,
         n_jobs: int | None = None,
         verbose: int = 0,
 ) -> DualOneVsRestArtifacts:
@@ -120,6 +153,8 @@ def train_dual_one_vs_rest_models(
         x=x,
         y=y_class_name,
         estimator=class_name_estimator,
+        mil_mode=mil_mode,
+        mil_config=mil_config,
         n_jobs=n_jobs,
         verbose=verbose,
     )
@@ -127,6 +162,8 @@ def train_dual_one_vs_rest_models(
         x=x,
         y=y_primary_label,
         estimator=primary_label_estimator,
+        mil_mode=mil_mode,
+        mil_config=mil_config,
         n_jobs=n_jobs,
         verbose=verbose,
     )

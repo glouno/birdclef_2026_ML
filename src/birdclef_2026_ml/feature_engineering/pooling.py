@@ -3,6 +3,7 @@ import numpy as np
 from typing import Literal
 
 from birdclef_2026_ml.feature_engineering.configs import PoolingConfig, ChunkConfig, FeatureConfig
+from birdclef_2026_ml.feature_engineering.chunking import get_chunk_intervals, feature_frame_rate_hz
 
 
 def _nan_skew(x: np.ndarray, axis: int = -1) -> np.ndarray:
@@ -21,36 +22,6 @@ def _nan_kurtosis(x: np.ndarray, axis: int = -1) -> np.ndarray:
     m4 = np.nanmean(centered ** 4, axis=axis)
     s4 = np.squeeze(std, axis=axis) ** 4
     return np.where(s4 == 0.0, -3.0, m4 / s4 - 3.0)
-
-
-def _feature_frame_rate_hz(feature_name: str, feature_cfg: FeatureConfig) -> float:
-    if feature_name == "waveform":
-        return float(feature_cfg.sr)
-    return float(feature_cfg.sr) / float(feature_cfg.hop_length)
-
-
-def _chunk_size_in_frames(chunk_cfg: ChunkConfig, frame_rate_hz: float) -> int:
-    if frame_rate_hz <= 0.0:
-        raise ValueError("frame_rate_hz must be > 0")
-    return max(1, int(np.ceil(float(chunk_cfg.chunks_s) * frame_rate_hz)))
-
-
-def _chunk_step_in_frames(chunk_cfg: ChunkConfig, frame_rate_hz: float) -> int:
-    """Return the step size (stride) in frames between chunk starts, accounting for overlap."""
-    chunk_size = _chunk_size_in_frames(chunk_cfg, frame_rate_hz)
-    overlap_frames = int(np.round(chunk_cfg.overlap * frame_rate_hz))
-    step = chunk_size - overlap_frames
-    return max(1, step)
-
-
-def _n_chunks_from_time(n_frames: int, chunk_cfg: ChunkConfig, frame_rate_hz: float) -> int:
-    if n_frames <= 0:
-        return 0
-    chunk_size_frames = _chunk_size_in_frames(chunk_cfg, frame_rate_hz)
-    step_frames = _chunk_step_in_frames(chunk_cfg, frame_rate_hz)
-    if n_frames < chunk_size_frames:
-        return 1
-    return 1 + max(0, (n_frames - chunk_size_frames) // step_frames)
 
 
 def global_pool(feature_matrix: np.ndarray, pooling_cfg: PoolingConfig) -> np.ndarray:
@@ -109,14 +80,10 @@ def chunk_pool(
     if n_frames == 0:
         return np.array([], dtype=float)
 
-    chunk_size_frames = _chunk_size_in_frames(chunk_cfg, frame_rate_hz)
-    step_frames = _chunk_step_in_frames(chunk_cfg, frame_rate_hz)
-    n_chunks = _n_chunks_from_time(n_frames, chunk_cfg, frame_rate_hz)
+    chunk_indices = get_chunk_intervals(n_frames, chunk_cfg.chunks_s, chunk_cfg.overlap, frame_rate_hz)
 
     chunks: list[np.ndarray] = []
-    for idx in range(n_chunks):
-        start = idx * step_frames
-        end = min(start + chunk_size_frames, n_frames)
+    for start, end in chunk_indices:
         if end <= start:
             continue
         chunk_vec = global_pool(x[:, start:end], pooling_cfg)
@@ -146,7 +113,7 @@ def pool_feature_dict(
         if chunk_cfg is None:
             raise ValueError("chunk_cfg is required for chunk mode")
         for name, mat in features_dict.items():
-            frame_rate_hz = _feature_frame_rate_hz(name, feature_cfg)
+            frame_rate_hz = feature_frame_rate_hz(name, feature_cfg.sr, feature_cfg.hop_length)
             pooled[name] = chunk_pool(
                 feature_matrix=mat,
                 chunk_cfg=chunk_cfg,

@@ -1,6 +1,11 @@
 import numpy as np
 
 
+def pad_short_audio(y_arr, chunk_cfg, feature_cfg):
+    min_samples = int(np.ceil(float(chunk_cfg.chunks_s) * float(feature_cfg.sr)))
+    return _pad_short_audio_randomly(y_arr, min_samples=min_samples)
+
+
 def _pad_short_audio_randomly(y: np.ndarray, min_samples: int) -> np.ndarray:
     if y.size >= min_samples:
         return y

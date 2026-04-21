@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle, Patch
 import seaborn as sns
 
-from birdclef_2026_ml.audio_utils import load_soundscape_audio, compute_rms_dbfs, select_silence_frames_from_rms_db
+from birdclef_2026_ml.processing.audio_utils import load_soundscape_audio, compute_rms_dbfs, select_silence_frames_from_rms_db
 from birdclef_2026_ml.constants import GEO_BBOX_EAST, GEO_BBOX_NORTH, GEO_BBOX_SOUTH, GEO_BBOX_WEST, SAMPLE_RATE
 
 

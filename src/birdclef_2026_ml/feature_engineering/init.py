@@ -2,9 +2,9 @@ from typing import Literal
 import librosa
 import numpy as np
 
-from birdclef_2026_ml.audio_utils import build_audio_path, get_path, load_audio
+from birdclef_2026_ml.processing.audio_utils import build_audio_path, get_path, load_audio
 from birdclef_2026_ml.feature_engineering.configs import FeatureConfig, PoolingConfig, ChunkConfig
-from birdclef_2026_ml.feature_engineering.utils import _pad_short_audio_randomly, _percentile_label
+from birdclef_2026_ml.feature_engineering.utils import pad_short_audio, _percentile_label
 from birdclef_2026_ml.feature_engineering.feature_extract import extract_all_frame_features
 from birdclef_2026_ml.feature_engineering.pooling import pool_feature_dict
 
@@ -61,11 +61,11 @@ def build_feature_vector(
     if y_arr.size == 0:
         raise ValueError("y must contain at least one sample")
 
+    # Pad audio (prepend/append/prepend half and append half) for audios shorter than chunks length
     if pooling_mode == "chunk":
         if chunk_cfg is None:
             raise ValueError("chunk_cfg is required for chunk mode")
-        min_samples = int(np.ceil(float(chunk_cfg.chunks_s) * float(feature_cfg.sr)))
-        y_arr = _pad_short_audio_randomly(y_arr, min_samples=min_samples)
+        y_arr = pad_short_audio(y_arr, chunk_cfg, feature_cfg)
 
     frame_features = extract_all_frame_features(y_arr, feature_cfg)
     pooled = pool_feature_dict(

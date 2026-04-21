@@ -47,7 +47,6 @@ class PoolingConfig:
 
 @dataclass(frozen=False)
 class ChunkConfig:
-    # n_chunks: int = 5
     chunks_s: float = 5.0
     overlap: float = 0.0  # seconds, must be >= 0 and < chunks_s
 
