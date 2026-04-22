@@ -14,14 +14,6 @@ def _chunk_size_in_frames(chunks_s, frame_rate_hz: float) -> int:
     return max(1, int(np.ceil(float(chunks_s) * frame_rate_hz)))
 
 
-def _chunk_step_in_frames(chunks_s, overlap, frame_rate_hz: float) -> int:
-    """Return the step size (stride) in frames between chunk starts, accounting for overlap."""
-    chunk_size = _chunk_size_in_frames(chunks_s, frame_rate_hz)
-    overlap_frames = int(np.round(overlap * frame_rate_hz))
-    step = chunk_size - overlap_frames
-    return max(1, step)
-
-
 def _window_step_in_frames(step_size_s, frame_rate_hz: float) -> int:
     if frame_rate_hz <= 0.0:
         raise ValueError("frame_rate_hz must be > 0")
@@ -53,16 +45,3 @@ def get_sliding_window_intervals(
         start = max(0, end - window_size)
         windows.append((start, end))
     return windows
-
-
-# def get_chunk_intervals(n_frames: int, chunks_s: float, step_size_s: float, frame_rate_hz: float) -> list[tuple[int, int]]:
-#     """
-#     Return a list of (start, end) frame indices for each chunk.
-#     The last chunk always covers the last `chunks_s` duration, ignoring hop if necessary.
-#     """
-#     return get_sliding_window_intervals(
-#         n_frames=n_frames,
-#         window_size_s=chunks_s,
-#         step_size_s=step_size_s,
-#         frame_rate_hz=frame_rate_hz,
-#     )

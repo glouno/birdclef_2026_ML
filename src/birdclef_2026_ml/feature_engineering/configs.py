@@ -15,6 +15,7 @@ class FeatureConfig:
     hop_length: int = 512
     n_mfcc: int = 20
     roll_percent: float = 0.85
+    n_mels: int = 128  # balance between resolution & smoothing
     include_waveform_stats: bool = False
     include_mfcc: bool = True
     include_delta: bool = True

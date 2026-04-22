@@ -7,7 +7,8 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle, Patch
 import seaborn as sns
 
-from birdclef_2026_ml.processing.audio_utils import load_soundscape_audio, compute_rms_dbfs, select_silence_frames_from_rms_db
+from birdclef_2026_ml.processing.audio_utils import load_soundscape_audio
+from birdclef_2026_ml.audio.silence_detect import compute_rms_dbfs, select_silence_frames_from_rms_db
 from birdclef_2026_ml.constants import GEO_BBOX_EAST, GEO_BBOX_NORTH, GEO_BBOX_SOUTH, GEO_BBOX_WEST, SAMPLE_RATE
 
 
@@ -295,9 +296,9 @@ def plot_soundscape_species_activity(
         "Insecta": "#A855F7",
     }
 
-    df = soundscapes.loc[soundscapes["filename"] == filename, ["start", "end", "primary_label_list"]].copy()
-    df["start_sec"] = pd.to_timedelta(df["start"]).dt.total_seconds()
-    df["duration"] = pd.to_timedelta(df["end"]).dt.total_seconds() - df["start_sec"]
+    df = soundscapes.loc[soundscapes["filename"] == filename, ["start_sec", "end_sec", "primary_label_list"]].copy()
+    # df["start_sec"] = pd.to_timedelta(df["start"]).dt.total_seconds()
+    df["duration"] = df["end_sec"] - df["start_sec"]
 
     events = (
         df[["start_sec", "duration", "primary_label_list"]]
@@ -442,21 +443,21 @@ def plot_waveform_rms_db_with_silence(
     y,
     cfg,
     silence_th=-40.0,
-    start_th=None,
-    stop_th=None,
+    high_th=None,
+    low_th=None,
     ref_for_db=1.0,
     axes=None,
     figsize=(14, 7),
 ):
     """Plot waveform+normalized RMS (top) and RMS dB (bottom) with silence spans."""
-    rms, rms_db, times = compute_rms_dbfs(y, sr=cfg.sr, frame_length=cfg.frame_length,
+    rms, rms_db, times = compute_rms_dbfs(y, sr=cfg.sr, frame_length=cfg.n_fft,
                                           hop_length=cfg.hop_length, ref_for_db=ref_for_db)
     silent_mask, silent_seconds, silence_segments = select_silence_frames_from_rms_db(
         rms_db=rms_db,
         times=times,
         silence_th=silence_th,
-        start_th=start_th,
-        stop_th=stop_th,
+        high_th=high_th,
+        low_th=low_th,
     )
 
     created_fig = False
@@ -471,8 +472,8 @@ def plot_waveform_rms_db_with_silence(
     t_wave = np.arange(len(y)) / cfg.sr
 
     silence_str = ""
-    if start_th and stop_th:
-        silence_str = f"[{start_th:.2f}, {stop_th:.2f}] dB"
+    if high_th and low_th:
+        silence_str = f"[{high_th:.2f}, {low_th:.2f}] dB"
     else:
         silence_str = f"{silence_th:.2f} dB"
 
@@ -484,11 +485,11 @@ def plot_waveform_rms_db_with_silence(
     axes[0].grid(alpha=0.2)
 
     axes[1].plot(times, rms_db, color="black", linewidth=1.2, label="RMS (dB)")
-    if start_th is None or stop_th is None:
+    if high_th is None or low_th is None:
         axes[1].axhline(silence_th, color="red", linestyle="--", linewidth=1.1, label=f"silence_th={silence_th:.1f} dB")
     else:
-        axes[1].axhline(start_th, color="red", linestyle="--", linewidth=1.1, label=f"start_th={start_th:.1f} dB")
-        axes[1].axhline(stop_th, color="darkorange", linestyle="--", linewidth=1.1, label=f"stop_th={stop_th:.1f} dB")
+        axes[1].axhline(high_th, color="red", linestyle="--", linewidth=1.1, label=f"high_th={high_th:.1f} dB")
+        axes[1].axhline(low_th, color="darkorange", linestyle="--", linewidth=1.1, label=f"low_th={low_th:.1f} dB")
     axes[1].set_xlabel("Time (s)")
     axes[1].set_ylabel("dB")
     axes[1].set_title(f"RMS dB with silence threshold = {silence_str}")
@@ -503,3 +504,53 @@ def plot_waveform_rms_db_with_silence(
         fig.tight_layout()
 
     return fig, axes, silent_seconds, silence_segments
+
+
+def plot_orig_vs_clean_audios(y_orig, y_clean, S_orig, S_clean, sr):
+    fig, axes = plt.subplots(4, 1, figsize=(10, 7))
+
+    # Original spectrogram
+    img1 = librosa.display.specshow(
+        librosa.amplitude_to_db(np.abs(S_orig), ref=1.),
+        sr=sr,
+        x_axis='time',
+        y_axis='hz',
+        ax=axes[0],
+        cmap='magma',
+    )
+    axes[0].figure.colorbar(img1, ax=axes[0], format='%+2.0f dB')
+    axes[0].set_title("Spectogram [original]")
+
+    # Cleaned spectrogram or message
+    if S_clean is not None:
+        img2 = librosa.display.specshow(
+            librosa.amplitude_to_db(np.abs(S_clean), ref=1.),
+            sr=sr,
+            x_axis='time',
+            y_axis='hz',
+            ax=axes[1],
+            cmap='magma',
+        )
+        axes[1].figure.colorbar(img2, ax=axes[1], format='%+2.0f dB')
+        axes[1].set_title("Spectogram [cleaned]")
+    else:
+        axes[1].text(0.5, 0.5, "No cleaned spectogram", ha='center', va='center', fontsize=12, color='red')
+        axes[1].set_title("Spectogram [cleaned]")
+        axes[1].set_xticks([])
+        axes[1].set_yticks([])
+
+    # Original waveform
+    librosa.display.waveshow(y_orig, sr=sr, ax=axes[2])
+    axes[2].set_title("Waveform [original]")
+
+    # Cleaned waveform or message
+    if S_clean is not None:
+        librosa.display.waveshow(y_clean, sr=sr, ax=axes[3])
+        axes[3].set_title("Waveform [cleaned]")
+    else:
+        axes[3].text(0.5, 0.5, "No cleaned waveform", ha='center', va='center', fontsize=12, color='red')
+        axes[3].set_title("Waveform [cleaned]")
+        axes[3].set_xticks([])
+        axes[3].set_yticks([])
+
+    plt.tight_layout()
