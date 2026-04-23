@@ -68,7 +68,7 @@ def weighted_mean(S, weights):
     return np.sum(S * weights[None, :], axis=1)
 
 
-def robust_time_pooling(
+def weighted_time_pooling(
     S,
     method="median",
     percentile=80,

@@ -7,6 +7,10 @@ from sklearn.multiclass import OneVsRestClassifier
 from sklearn.preprocessing import LabelEncoder
 
 from birdclef_2026_ml.feature_engineering.configs import MILConfig
+from birdclef_2026_ml.feature_engineering.feature_reweighting import (
+    build_feature_scale_vector,
+    load_primary_label_weights,
+)
 from birdclef_2026_ml.models.hierarchical_models import (
     _fit_encoder,
     _predict_proba_aligned,
@@ -29,7 +33,7 @@ Array2D = np.ndarray
 class OneVsRestArtifacts:
     """Trained state for one-vs-rest single-target classification."""
 
-    model: OneVsRestClassifier
+    model: Any
     label_encoder: LabelEncoder
     mil_mode: bool = False
     mil_config: MILConfig | None = None
@@ -41,6 +45,66 @@ class DualOneVsRestArtifacts:
 
     class_name: OneVsRestArtifacts
     primary_label: OneVsRestArtifacts
+
+
+@dataclass
+class WeightedOneVsRestClassifier:
+    """One-vs-rest wrapper that can rescale features independently per class."""
+
+    estimators_: list[Any]
+    classes_: Array1D
+    feature_scales_: Array2D
+
+    def predict_proba(self, x: Any) -> Array2D:
+        x_arr = np.asarray(x, dtype=float)
+        if x_arr.ndim == 1:
+            x_arr = x_arr[np.newaxis, :]
+        if x_arr.ndim != 2:
+            raise ValueError("x must be a 2D feature matrix")
+
+        positive_probs: list[np.ndarray] = []
+        for estimator, feature_scale in zip(self.estimators_, self.feature_scales_):
+            x_scaled = x_arr * feature_scale[None, :]
+            if hasattr(estimator, "predict_proba"):
+                proba = np.asarray(estimator.predict_proba(x_scaled), dtype=float)
+                positive_col = int(np.flatnonzero(np.asarray(estimator.classes_) == 1)[0])
+                positive_probs.append(proba[:, positive_col])
+                continue
+
+            if hasattr(estimator, "decision_function"):
+                scores = np.asarray(estimator.decision_function(x_scaled), dtype=float).ravel()
+                positive_probs.append(1.0 / (1.0 + np.exp(-scores)))
+                continue
+
+            raise ValueError(
+                "Each one-vs-rest estimator must expose predict_proba or decision_function"
+            )
+
+        proba = np.column_stack(positive_probs)
+        denom = proba.sum(axis=1, keepdims=True)
+        denom = np.where(denom == 0.0, 1.0, denom)
+        return proba / denom
+
+
+def _fit_weighted_ovr(
+    x: Array2D,
+    y_enc: Array1D,
+    estimator: Any,
+    feature_scales: Array2D,
+) -> WeightedOneVsRestClassifier:
+    estimators: list[Any] = []
+    classes = np.arange(feature_scales.shape[0], dtype=int)
+    for class_id, feature_scale in enumerate(feature_scales):
+        y_binary = (y_enc == class_id).astype(int)
+        estimator_binary = clone(estimator)
+        estimator_binary.fit(x * feature_scale[None, :], y_binary)
+        estimators.append(estimator_binary)
+
+    return WeightedOneVsRestClassifier(
+        estimators_=estimators,
+        classes_=classes,
+        feature_scales_=feature_scales,
+    )
 
 
 def _predict_proba_ovr(artifacts: OneVsRestArtifacts, x: Any) -> Array2D:
@@ -74,6 +138,9 @@ def train_one_vs_rest_model(
         x: Any,
         y: Any,
         estimator: Any,
+        feature_names: list[str] | None = None,
+        feature_reweighting: bool = True,
+        profile_weights_by_label: dict[str, np.ndarray] | None = None,
         mil_mode: bool = False,
         mil_config: MILConfig | None = None,
         n_jobs: int | None = None,
@@ -94,12 +161,42 @@ def train_one_vs_rest_model(
     if mil_mode:
         y_enc = np.asarray(label_encoder.transform(y_fit), dtype=int)
 
-    model = OneVsRestClassifier(
-        estimator=clone(estimator),
-        n_jobs=n_jobs,
-        verbose=verbose,
-    )
-    model.fit(x_fit, y_enc)
+    x_fit_arr = np.asarray(x_fit, dtype=float)
+    if x_fit_arr.ndim != 2:
+        raise ValueError("x must be a 2D feature matrix for one-vs-rest training")
+
+    inferred_feature_names = feature_names
+    if inferred_feature_names is None and hasattr(x, "feature_names"):
+        inferred_feature_names = list(getattr(x, "feature_names"))
+
+    if feature_reweighting:
+        if profile_weights_by_label is None:
+            profile_weights_by_label = load_primary_label_weights()
+
+        feature_scales = np.vstack([
+            build_feature_scale_vector(
+                band_weights=profile_weights_by_label.get(
+                    str(label),
+                    np.ones(x_fit_arr.shape[1], dtype=float),
+                ),
+                n_features=x_fit_arr.shape[1],
+                feature_names=inferred_feature_names,
+            )
+            for label in label_encoder.classes_
+        ])
+        model = _fit_weighted_ovr(
+            x=x_fit_arr,
+            y_enc=y_enc,
+            estimator=estimator,
+            feature_scales=feature_scales,
+        )
+    else:
+        model = OneVsRestClassifier(
+            estimator=clone(estimator),
+            n_jobs=n_jobs,
+            verbose=verbose,
+        )
+        model.fit(x_fit_arr, y_enc)
 
     return OneVsRestArtifacts(
         model=model,
@@ -135,6 +232,9 @@ def train_dual_one_vs_rest_models(
         y_primary_label: Any,
         class_name_estimator: Any,
         primary_label_estimator: Any | None = None,
+        feature_names: list[str] | None = None,
+        feature_reweighting: bool = True,
+        profile_weights_by_label: dict[str, np.ndarray] | None = None,
         mil_mode: bool = False,
         mil_config: MILConfig | None = None,
         n_jobs: int | None = None,
@@ -152,6 +252,9 @@ def train_dual_one_vs_rest_models(
         x=x,
         y=y_class_name,
         estimator=class_name_estimator,
+        feature_names=feature_names,
+        feature_reweighting=feature_reweighting,
+        profile_weights_by_label=profile_weights_by_label,
         mil_mode=mil_mode,
         mil_config=mil_config,
         n_jobs=n_jobs,
@@ -161,6 +264,9 @@ def train_dual_one_vs_rest_models(
         x=x,
         y=y_primary_label,
         estimator=primary_label_estimator,
+        feature_names=feature_names,
+        feature_reweighting=feature_reweighting,
+        profile_weights_by_label=profile_weights_by_label,
         mil_mode=mil_mode,
         mil_config=mil_config,
         n_jobs=n_jobs,

@@ -1,0 +1,10 @@
+{
+  "sr": 32000,
+  "n_fft": 1024,
+  "hop_length": 512,
+  "noise_percentile": 15.0,
+  "alpha": 3.0,
+  "smooth_freq": 3,
+  "smooth_time": 3,
+  "eps": 1e-8
+}

@@ -4,6 +4,22 @@ import librosa
 from birdclef_2026_ml.feature_engineering.configs import FeatureConfig
 
 
+def extract_mel_spectrogram_features(y: np.ndarray, cfg: FeatureConfig) -> dict[str, np.ndarray]:
+    """Extract frame-level mel spectrogram features for later class-specific weighting."""
+    if not cfg.include_mel_spectrogram:
+        return {}
+
+    mel_spectrogram = librosa.feature.melspectrogram(
+        y=y,
+        sr=cfg.sr,
+        n_mels=cfg.n_mels,
+        n_fft=cfg.n_fft,
+        hop_length=cfg.hop_length,
+    )
+    mel_spectrogram_db = librosa.power_to_db(mel_spectrogram, ref=np.max)
+    return {"mel_spectrogram": mel_spectrogram_db}
+
+
 def extract_mfcc_features(y: np.ndarray, cfg: FeatureConfig) -> dict[str, np.ndarray]:
     """Extract MFCC frame features and optional deltas from a waveform.
 
@@ -103,6 +119,7 @@ def extract_all_frame_features(
     if cfg.include_waveform_stats:
         features["waveform"] = y_arr[np.newaxis, :]
 
+    features.update(extract_mel_spectrogram_features(y_arr, cfg))
     features.update(extract_mfcc_features(y_arr, cfg))
     features.update(extract_spectral_features(y_arr, cfg))
     features.update(extract_energy_features(y_arr, cfg))

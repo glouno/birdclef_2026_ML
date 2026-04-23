@@ -506,36 +506,43 @@ def plot_waveform_rms_db_with_silence(
     return fig, axes, silent_seconds, silence_segments
 
 
-def plot_orig_vs_clean_audios(y_orig, y_clean, S_orig, S_clean, sr):
+def plot_orig_vs_clean_audios(y_orig, y_clean, sr, n_mels, n_fft, hop_length):
     fig, axes = plt.subplots(4, 1, figsize=(10, 7))
 
-    # Original spectrogram
+    # Compute mel spectrograms
+    S_orig = librosa.feature.melspectrogram(y=y_orig, sr=sr, n_mels=n_mels, n_fft=n_fft, hop_length=hop_length)
+    if y_clean is not None:
+        S_clean = librosa.feature.melspectrogram(y=y_clean, sr=sr, n_mels=n_mels, n_fft=n_fft, hop_length=hop_length)
+    else:
+        S_clean = None
+
+    # Original mel spectrogram
     img1 = librosa.display.specshow(
-        librosa.amplitude_to_db(np.abs(S_orig), ref=1.),
+        librosa.power_to_db(S_orig, ref=1.0),
         sr=sr,
         x_axis='time',
-        y_axis='hz',
+        y_axis='mel',
         ax=axes[0],
         cmap='magma',
     )
     axes[0].figure.colorbar(img1, ax=axes[0], format='%+2.0f dB')
-    axes[0].set_title("Spectogram [original]")
+    axes[0].set_title("Mel Spectrogram [original]")
 
-    # Cleaned spectrogram or message
+    # Cleaned mel spectrogram or message
     if S_clean is not None:
         img2 = librosa.display.specshow(
-            librosa.amplitude_to_db(np.abs(S_clean), ref=1.),
+            librosa.power_to_db(S_clean, ref=1.0),
             sr=sr,
             x_axis='time',
-            y_axis='hz',
+            y_axis='mel',
             ax=axes[1],
             cmap='magma',
         )
         axes[1].figure.colorbar(img2, ax=axes[1], format='%+2.0f dB')
-        axes[1].set_title("Spectogram [cleaned]")
+        axes[1].set_title("Mel Spectrogram [cleaned]")
     else:
-        axes[1].text(0.5, 0.5, "No cleaned spectogram", ha='center', va='center', fontsize=12, color='red')
-        axes[1].set_title("Spectogram [cleaned]")
+        axes[1].text(0.5, 0.5, "No cleaned mel spectrogram", ha='center', va='center', fontsize=12, color='red')
+        axes[1].set_title("Mel Spectrogram [cleaned]")
         axes[1].set_xticks([])
         axes[1].set_yticks([])
 
@@ -544,7 +551,7 @@ def plot_orig_vs_clean_audios(y_orig, y_clean, S_orig, S_clean, sr):
     axes[2].set_title("Waveform [original]")
 
     # Cleaned waveform or message
-    if S_clean is not None:
+    if y_clean is not None:
         librosa.display.waveshow(y_clean, sr=sr, ax=axes[3])
         axes[3].set_title("Waveform [cleaned]")
     else:

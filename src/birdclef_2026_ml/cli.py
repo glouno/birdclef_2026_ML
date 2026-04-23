@@ -1,21 +1,50 @@
 import argparse
-from pathlib import Path
 
-import pandas as pd
-
-from birdclef_2026_ml.paths import PATHS
+from birdclef_2026_ml.processing.audio_utils import build_audio_path, load_audio, load_config
+from birdclef_2026_ml.audio import apply_spectral_gating, build_profile
+from birdclef_2026_ml.feature_engineering.configs import SpectralGatingConfig
 from birdclef_2026_ml.processing.preprocess import (
     preprocess_train_for_models,
     preprocess_soundscapes_for_models
 )
-from birdclef_2026_ml.constants import SAMPLE_RATE
-
-from birdclef_2026_ml.audio import apply_spectral_gating
+from birdclef_2026_ml.paths import PATHS
+import pandas as pd
+import numpy as np
+from pathlib import Path
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="birdclef", description="BirdCLEF data utilities")
     subparsers = parser.add_subparsers(dest="command")
+
+    parser_profiles = subparsers.add_parser(
+        "build-profiles",
+        help="Build all audio profiles and save to all_profiles.npy."
+    )
+    parser_profiles.add_argument(
+        "--output-path-key",
+        type=str,
+        default="profiles",
+        help="Key in PATHS for output profiles directory."
+    )
+    parser_profiles.add_argument(
+        "--n-mels",
+        type=int,
+        default=128,
+        help="Number of mel bands."
+    )
+    parser_profiles.add_argument(
+        "--input-train-key",
+        type=str,
+        default="proc_train",
+        help="Key in PATHS for processed train parquet."
+    )
+    parser_profiles.add_argument(
+        "--spectral-gating-config-path",
+        type=str,
+        default=None,
+        help="Path to config.json for spectral gating (optional, overrides default)."
+    )
 
     parser_spectral_gating = subparsers.add_parser(
         "spectral-gating",
@@ -23,19 +52,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser_spectral_gating.add_argument("--df-input-path", type=str, required=True,
                                         help="Key in PATHS for input DataFrame (parquet)")
-    parser_spectral_gating.add_argument("--sr", type=int, default=SAMPLE_RATE, help="Sample rate")
-    parser_spectral_gating.add_argument("--n-fft", type=int, default=1024, help="FFT window size")
-    parser_spectral_gating.add_argument("--hop-length", type=int, default=512, help="Hop length for STFT")
-    parser_spectral_gating.add_argument("--noise-percentile", type=float,
-                                        default=15.0, help="Noise percentile for gating")
-    parser_spectral_gating.add_argument("--alpha", type=float, default=3.0, help="Alpha for gating strength")
-    parser_spectral_gating.add_argument("--smooth-freq", type=int, default=3, help="Smoothing in frequency bins")
-    parser_spectral_gating.add_argument("--smooth-time", type=int, default=3, help="Smoothing in time frames")
-    parser_spectral_gating.add_argument("--eps", type=float, default=1e-8, help="Epsilon for numerical stability")
-    parser_spectral_gating.add_argument(
-        "--input-root", type=str, required=True, help="Key in PATHS for input audio root")
-    parser_spectral_gating.add_argument(
-        "--output-root", type=str, required=True, help="Key in PATHS for output audio root")
+    parser_spectral_gating.add_argument("--config-path", type=str, required=True,
+                                        help="Path to config.json file with all spectral gating parameters.")
+    parser_spectral_gating.add_argument("--input-root", type=str, required=True,
+                                        help="Key in PATHS for input audio root")
+    parser_spectral_gating.add_argument("--output-root", type=str, required=True,
+                                        help="Key in PATHS for output audio root")
     parser_spectral_gating.add_argument("--filename-col", type=str, default="filename",
                                         help="Column name for filenames in DataFrame")
 
@@ -80,21 +102,46 @@ def _run_preprocess_soundscapes_for_models(args) -> Path:
     return output_path
 
 
+def _run_build_profiles(args):
+    # Load train DataFrame
+    train = pd.read_parquet(PATHS[args.input_train_key])
+
+    # Load config
+    config_path = Path(args.spectral_gating_config_path)
+    cfg_dict = load_config(config_path)
+    spectral_gating_config = SpectralGatingConfig(**cfg_dict)
+
+    profiles = []
+    for idx in train.index:
+        y_clean_path = build_audio_path(train, idx, pathroot="train_audio_spectral_gating_dir")
+        y_clean = load_audio(y_clean_path, spectral_gating_config.sr)
+        profile = build_profile(
+            y_clean,
+            sr=spectral_gating_config.sr,
+            n_mels=args.n_mels,
+            n_fft=spectral_gating_config.n_fft,
+            hop_length=spectral_gating_config.hop_length
+        )
+        profiles.append(profile)
+
+    profiles = np.array(profiles)
+    output_path = PATHS[args.output_path_key] / "all_profiles.npy"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    np.save(output_path, profiles)
+    print(f"Profiles saved to: {output_path}")
+
+
 def _run_spectral_gating(args):
     df_input_path = PATHS[args.df_input_path]
     df = pd.read_parquet(df_input_path)
     df = df.drop_duplicates(subset=["filename"]).reset_index(drop=True)
 
+    cfg_dict = load_config(Path(args.config_path))
+    config = SpectralGatingConfig(**cfg_dict)
+
     apply_spectral_gating(
         df,
-        sr=args.sr,
-        n_fft=args.n_fft,
-        hop_length=args.hop_length,
-        noise_percentile=args.noise_percentile,
-        alpha=args.alpha,
-        smooth_freq=args.smooth_freq,
-        smooth_time=args.smooth_time,
-        eps=args.eps,
+        config,
         input_root=args.input_root,
         output_root=args.output_root,
         filename_col=args.filename_col,
@@ -120,6 +167,9 @@ def main(argv=None) -> int:
     elif args.command == "spectral-gating":
         _run_spectral_gating(args)
         print("Spectral gating completed.")
+        return 0
+    elif args.command == "build-profiles":
+        _run_build_profiles(args)
         return 0
     else:
         parser.error(f"Unknown command: {args.command}")

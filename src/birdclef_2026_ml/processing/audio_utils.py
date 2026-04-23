@@ -1,6 +1,7 @@
 from pydub import AudioSegment
 import numpy as np
 from pathlib import Path
+import json
 
 import librosa
 import soundfile as sf
@@ -37,12 +38,11 @@ def build_audio_path(
 
 
 def build_audio_path_row(
-    df,
-    idx: int,
+    row,
     pathroot: str,
     filename_col: str = "filename",
 ) -> Path:
-    return build_audio_path(df=df, idx=idx, pathroot=pathroot, filename_col=filename_col)
+    return get_path(pathroot, filename=row[filename_col])
 
 
 def load_train_audio(
@@ -110,3 +110,10 @@ def save_ogg(path, y, sr):
         channels=1
     )
     audio.export(str(path), format="ogg", codec="libvorbis")
+
+
+def load_config(path: Path):
+    config = dict()
+    with open(path) as f:
+        config = json.load(f)
+    return config

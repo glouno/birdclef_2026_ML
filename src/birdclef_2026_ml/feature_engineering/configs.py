@@ -1,11 +1,24 @@
 
+# Spectral gating config dataclass
 from typing import Optional
-from dataclasses import dataclass, field
-from typing import Literal
-
 from birdclef_2026_ml.constants import SAMPLE_RATE
+from typing import Literal
+from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 StatName = Literal["mean", "std", "min", "max", "skew", "kurtosis"]
+
+
+@dataclass(frozen=False)
+class SpectralGatingConfig:
+    sr: int
+    n_fft: int
+    hop_length: int
+    noise_percentile: float
+    alpha: float
+    smooth_freq: int
+    smooth_time: int
+    eps: float
 
 
 @dataclass(frozen=False)
@@ -17,17 +30,20 @@ class FeatureConfig:
     roll_percent: float = 0.85
     n_mels: int = 128  # balance between resolution & smoothing
     include_waveform_stats: bool = False
-    include_mfcc: bool = True
-    include_delta: bool = True
-    include_delta2: bool = True
-    include_spectral: bool = True
-    include_energy: bool = True
+    include_mel_spectrogram: bool = True
+    include_mfcc: bool = False
+    include_delta: bool = False
+    include_delta2: bool = False
+    include_spectral: bool = False
+    include_energy: bool = False
 
     def __post_init__(self):
         if self.n_fft <= 0 or self.hop_length <= 0:
             raise ValueError("n_fft and hop_length must be > 0")
         if not (0.0 < self.roll_percent < 1.0):
             raise ValueError("roll_percent must be in (0, 1)")
+        if self.n_mels <= 0:
+            raise ValueError("n_mels must be > 0")
         if self.n_mfcc <= 0:
             raise ValueError("n_mfcc must be > 0")
 
