@@ -12,13 +12,16 @@ wheels/
 # Jupyter Notebooks
 .ipynb_checkpoints
 
-# Data directories
-data/raw
-data/processed
+
+# Data directories (ignore all except .json files)
+data/**
+!data/configs/
+!data/configs/**
 birdclef-2026/
 
 # Models
-data/models/
+models/
+*.joblib
 
 # macOS
 .DS_Store
