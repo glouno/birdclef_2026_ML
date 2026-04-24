@@ -27,12 +27,33 @@ def compute_weights(df, profiles):
     )["profile_norm"].apply(compute_median)
 
 
+def apply_profile_weights(x: np.ndarray, weights: np.ndarray, alpha: float) -> np.ndarray:
+    # alpha [0.1, 0.5] -> mild effect, stable
+    # alpha [0.5, 1] -> noticeable, still stable
+    # alpha >1 tends to overfit
+
+    # sum since we work with dB
+    print("apply_profile_weights", weights)
+    return x + alpha * weights
+
+
+def normalize_profile_weights_mean_std(weights: np.ndarray) -> np.ndarray:
+    """Normalize weights to zero mean and unit standard deviation."""
+    weights_arr = np.asarray(weights, dtype=float)
+    mean = weights_arr.mean()
+    std = weights_arr.std()
+    if std == 0.0:
+        return weights_arr - mean
+    return (weights_arr - mean) / std
+
+
 def rescale_profile_weights(weights: np.ndarray) -> np.ndarray:
-    """Central hook for future weight transforms; raw profile weights for now."""
-    return np.asarray(weights, dtype=float)
+    """Central hook for profile weight transforms."""
+    return normalize_profile_weights_mean_std(weights)
 
 
-def load_primary_label_weights(
+def load_weights(
+    col: str,
     train_path=PATHS["proc_train"],
     profiles_path=PATHS["profiles"] / "all_profiles.npy",
 ) -> dict[str, np.ndarray]:
@@ -40,51 +61,38 @@ def load_primary_label_weights(
     profiles = np.load(profiles_path)
     weights_df = compute_weights(train_df, profiles)
     return {
-        str(row.primary_label): rescale_profile_weights(row.profile_norm)
+        str(getattr(row, col)): rescale_profile_weights(row.profile_norm)
         for row in weights_df.itertuples(index=False)
     }
 
 
 def infer_mel_band_indices(
-    feature_names: list[str] | None,
-    n_features: int,
-    mel_feature_name: str = MEL_FEATURE_NAME,
+    feature_names: list[str],
 ) -> np.ndarray:
-    if feature_names is None:
-        if n_features == 128:
-            return np.arange(n_features, dtype=int)
-        return np.full(n_features, -1, dtype=int)
 
-    if len(feature_names) != n_features:
-        raise ValueError(
-            "feature_names length must match n_features "
-            f"({len(feature_names)} != {n_features})"
-        )
+    mel_band_indices = np.full(len(feature_names), -1, dtype=int)
+    prefix = f"{MEL_FEATURE_NAME}_"
 
-    mel_band_indices = np.full(n_features, -1, dtype=int)
-    prefix = f"{mel_feature_name}_"
     for feature_idx, feature_name in enumerate(feature_names):
         name = str(feature_name)
         if not name.startswith(prefix):
             continue
-        band_idx = int(name[len(prefix):].split("_", 1)[0]) - 1
-        mel_band_indices[feature_idx] = band_idx
+        band_token = name[len(prefix):].split("_", 1)[0]
+        if band_token.isdigit():
+            mel_band_indices[feature_idx] = int(band_token) - 1
+        break
     return mel_band_indices
 
 
 def build_feature_scale_vector(
     band_weights: np.ndarray,
-    n_features: int,
-    feature_names: list[str] | None = None,
-    mel_feature_name: str = MEL_FEATURE_NAME,
+    feature_names: list[str],
 ) -> np.ndarray:
     weights = np.asarray(band_weights, dtype=float).ravel()
     mel_band_indices = infer_mel_band_indices(
         feature_names=feature_names,
-        n_features=n_features,
-        mel_feature_name=mel_feature_name,
     )
-    scale_vector = np.ones(n_features, dtype=float)
+    scale_vector = np.ones(len(feature_names), dtype=float)
     mel_mask = mel_band_indices >= 0
     scale_vector[mel_mask] = weights[mel_band_indices[mel_mask]]
     return scale_vector

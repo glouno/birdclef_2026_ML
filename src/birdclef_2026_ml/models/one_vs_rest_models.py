@@ -3,13 +3,13 @@ from typing import Any
 
 import numpy as np
 from sklearn.base import clone
-from sklearn.multiclass import OneVsRestClassifier
 from sklearn.preprocessing import LabelEncoder
 
 from birdclef_2026_ml.feature_engineering.configs import MILConfig
 from birdclef_2026_ml.feature_engineering.feature_reweighting import (
     build_feature_scale_vector,
-    load_primary_label_weights,
+    load_weights,
+    apply_profile_weights,
 )
 from birdclef_2026_ml.models.hierarchical_models import (
     _fit_encoder,
@@ -48,12 +48,12 @@ class DualOneVsRestArtifacts:
 
 
 @dataclass
-class WeightedOneVsRestClassifier:
-    """One-vs-rest wrapper that can rescale features independently per class."""
+class PerClassOneVsRestClassifier:
+    """One-vs-rest wrapper that supports per-class sample scopes and scaling."""
 
     estimators_: list[Any]
     classes_: Array1D
-    feature_scales_: Array2D
+    feature_scales_: Array2D | None = None
 
     def predict_proba(self, x: Any) -> Array2D:
         x_arr = np.asarray(x, dtype=float)
@@ -63,8 +63,13 @@ class WeightedOneVsRestClassifier:
             raise ValueError("x must be a 2D feature matrix")
 
         positive_probs: list[np.ndarray] = []
-        for estimator, feature_scale in zip(self.estimators_, self.feature_scales_):
-            x_scaled = x_arr * feature_scale[None, :]
+        if self.feature_scales_ is None:
+            feature_scales = [None] * len(self.estimators_)
+        else:
+            feature_scales = list(self.feature_scales_)
+
+        for estimator, feature_scale in zip(self.estimators_, feature_scales):
+            x_scaled = x_arr if feature_scale is None else x_arr * feature_scale[None, :]
             if hasattr(estimator, "predict_proba"):
                 proba = np.asarray(estimator.predict_proba(x_scaled), dtype=float)
                 positive_col = int(np.flatnonzero(np.asarray(estimator.classes_) == 1)[0])
@@ -86,21 +91,68 @@ class WeightedOneVsRestClassifier:
         return proba / denom
 
 
-def _fit_weighted_ovr(
+def _build_label_scope_by_class_id(
+    y_enc: Array1D,
+    y_scope: Array1D,
+    label_encoder: LabelEncoder,
+) -> dict[int, Any]:
+    """Build mapping from encoded label id to its unique scope value."""
+    label_scope_by_class_id: dict[int, Any] = {}
+    for class_id, label in enumerate(label_encoder.classes_):
+        scope_values = np.unique(y_scope[y_enc == class_id])
+        if len(scope_values) != 1:
+            raise ValueError(
+                f"Label {label!r} must map to exactly one scope value, got {scope_values.tolist()}"
+            )
+        label_scope_by_class_id[class_id] = scope_values[0]
+    return label_scope_by_class_id
+
+
+def _fit_per_class_ovr(
     x: Array2D,
     y_enc: Array1D,
     estimator: Any,
-    feature_scales: Array2D,
-) -> WeightedOneVsRestClassifier:
+    feature_scales: Array2D | None = None,
+    alpha: float = 0.5,
+    y_scope: Array1D | None = None,
+    label_encoder: LabelEncoder | None = None,
+) -> PerClassOneVsRestClassifier:
     estimators: list[Any] = []
-    classes = np.arange(feature_scales.shape[0], dtype=int)
-    for class_id, feature_scale in enumerate(feature_scales):
-        y_binary = (y_enc == class_id).astype(int)
+    n_classes = len(label_encoder.classes_) if label_encoder is not None else int(np.max(y_enc)) + 1
+    classes = np.arange(n_classes, dtype=int)
+
+    label_scope_by_class_id: dict[int, Any] | None = None
+    if y_scope is not None:
+        if label_encoder is None:
+            raise ValueError("label_encoder is required when y_scope is provided")
+        label_scope_by_class_id = _build_label_scope_by_class_id(
+            y_enc=y_enc,
+            y_scope=y_scope,
+            label_encoder=label_encoder,
+        )
+
+    for class_id in classes:
+        if y_scope is None:
+            train_mask = np.ones(len(y_enc), dtype=bool)
+        else:
+            train_mask = y_scope == label_scope_by_class_id[class_id]
+
+        y_binary = (y_enc[train_mask] == class_id).astype(int)
+        if np.unique(y_binary).size < 2:
+            raise ValueError(
+                "Each one-vs-rest binary problem must include both positive and negative samples "
+                f"after scope filtering; class_id={class_id}"
+            )
+
+        x_train = x[train_mask]
         estimator_binary = clone(estimator)
-        estimator_binary.fit(x * feature_scale[None, :], y_binary)
+        if feature_scales is not None:
+            feature_scale = feature_scales[class_id]
+            x_train = apply_profile_weights(x_train, feature_scale[None, :], alpha)
+        estimator_binary.fit(x_train, y_binary)
         estimators.append(estimator_binary)
 
-    return WeightedOneVsRestClassifier(
+    return PerClassOneVsRestClassifier(
         estimators_=estimators,
         classes_=classes,
         feature_scales_=feature_scales,
@@ -138,9 +190,12 @@ def train_one_vs_rest_model(
         x: Any,
         y: Any,
         estimator: Any,
-        feature_names: list[str] | None = None,
+        feature_names: list[str],
+        class_scope: Any | None = None,
         feature_reweighting: bool = True,
         profile_weights_by_label: dict[str, np.ndarray] | None = None,
+        profile_target="primary_label",
+        alpha: float = 0.5,  # reweightning parameter
         mil_mode: bool = False,
         mil_config: MILConfig | None = None,
         n_jobs: int | None = None,
@@ -149,29 +204,30 @@ def train_one_vs_rest_model(
     """Train one-vs-rest model for a single target vector."""
     _validate_mil_enabled(mil_mode=mil_mode, mil_config=mil_config)
     y = _to_1d(y)
-    _validate_same_length(x, y)
+    if class_scope is not None:
+        class_scope = _to_1d(class_scope)
+        _validate_same_length(x, y, class_scope)
+    else:
+        _validate_same_length(x, y)
 
     x_fit = x
     y_fit = y
+    class_scope_fit = class_scope
     if mil_mode:
-        x_fit, y_fit, _ = flatten_mil_bags(x=x, y=y)
+        x_fit, y_fit, bag_sizes = flatten_mil_bags(x=x, y=y)
+        if class_scope is not None:
+            class_scope_fit = np.repeat(class_scope, bag_sizes)
 
     label_encoder = _fit_encoder(y)
-    y_enc = np.asarray(label_encoder.transform(y), dtype=int)
-    if mil_mode:
-        y_enc = np.asarray(label_encoder.transform(y_fit), dtype=int)
+    y_enc = np.asarray(label_encoder.transform(y_fit), dtype=int)
 
     x_fit_arr = np.asarray(x_fit, dtype=float)
     if x_fit_arr.ndim != 2:
         raise ValueError("x must be a 2D feature matrix for one-vs-rest training")
 
-    inferred_feature_names = feature_names
-    if inferred_feature_names is None and hasattr(x, "feature_names"):
-        inferred_feature_names = list(getattr(x, "feature_names"))
-
     if feature_reweighting:
         if profile_weights_by_label is None:
-            profile_weights_by_label = load_primary_label_weights()
+            profile_weights_by_label = load_weights(profile_target)
 
         feature_scales = np.vstack([
             build_feature_scale_vector(
@@ -179,24 +235,27 @@ def train_one_vs_rest_model(
                     str(label),
                     np.ones(x_fit_arr.shape[1], dtype=float),
                 ),
-                n_features=x_fit_arr.shape[1],
-                feature_names=inferred_feature_names,
+                feature_names=feature_names,
             )
             for label in label_encoder.classes_
         ])
-        model = _fit_weighted_ovr(
+        model = _fit_per_class_ovr(
             x=x_fit_arr,
             y_enc=y_enc,
             estimator=estimator,
             feature_scales=feature_scales,
+            alpha=alpha,
+            y_scope=class_scope_fit,
+            label_encoder=label_encoder,
         )
     else:
-        model = OneVsRestClassifier(
-            estimator=clone(estimator),
-            n_jobs=n_jobs,
-            verbose=verbose,
+        model = _fit_per_class_ovr(
+            x=x_fit_arr,
+            y_enc=y_enc,
+            estimator=estimator,
+            y_scope=class_scope_fit,
+            label_encoder=label_encoder,
         )
-        model.fit(x_fit_arr, y_enc)
 
     return OneVsRestArtifacts(
         model=model,
@@ -231,8 +290,8 @@ def train_dual_one_vs_rest_models(
         y_class_name: Any,
         y_primary_label: Any,
         class_name_estimator: Any,
-        primary_label_estimator: Any | None = None,
-        feature_names: list[str] | None = None,
+        primary_label_estimator: Any,
+        feature_names: list[str],
         feature_reweighting: bool = True,
         profile_weights_by_label: dict[str, np.ndarray] | None = None,
         mil_mode: bool = False,
@@ -245,9 +304,6 @@ def train_dual_one_vs_rest_models(
     y_primary_label = _to_1d(y_primary_label)
     _validate_same_length(x, y_class_name, y_primary_label)
 
-    if primary_label_estimator is None:
-        primary_label_estimator = class_name_estimator
-
     class_name_artifacts = train_one_vs_rest_model(
         x=x,
         y=y_class_name,
@@ -255,6 +311,7 @@ def train_dual_one_vs_rest_models(
         feature_names=feature_names,
         feature_reweighting=feature_reweighting,
         profile_weights_by_label=profile_weights_by_label,
+        profile_target="class_name",
         mil_mode=mil_mode,
         mil_config=mil_config,
         n_jobs=n_jobs,
@@ -265,8 +322,10 @@ def train_dual_one_vs_rest_models(
         y=y_primary_label,
         estimator=primary_label_estimator,
         feature_names=feature_names,
+        class_scope=y_class_name,
         feature_reweighting=feature_reweighting,
         profile_weights_by_label=profile_weights_by_label,
+        profile_target="primary_label",
         mil_mode=mil_mode,
         mil_config=mil_config,
         n_jobs=n_jobs,

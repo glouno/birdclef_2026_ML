@@ -166,6 +166,7 @@ def build_mil_feature_bags(
     bag_ids: Any | None = None,
 ) -> MILFeatureBags:
     """Build one MIL bag per precomputed chunk or from a full audio waveform."""
+
     chunk_iterable: Iterable[np.ndarray]
     if isinstance(chunks, np.ndarray) and chunks.ndim == 1:
         chunk_iterable = split_audio_into_chunks(
@@ -178,7 +179,8 @@ def build_mil_feature_bags(
 
     bags: list[Array2D] = []
     feature_names_ref: list[str] | None = None
-    for chunk in chunk_iterable:
+
+    for i, chunk in enumerate(chunk_iterable):
         bag, feature_names = build_mil_feature_matrix(
             y=np.asarray(chunk, dtype=float),
             feature_cfg=feature_cfg,
@@ -203,7 +205,7 @@ def build_mil_bags_from_df(
     feature_cfg: FeatureConfig,
     pooling_cfg: PoolingConfig,
     mil_cfg: MILConfig,
-    label_cols: str | list[str] | None = None,
+    # label_cols: str | list[str] | None = None,
     chunk_cfg: ChunkConfig | None = None,
     indices: list[int] | None = None,
     pathroot: str = "train_audio_dir",
@@ -214,19 +216,19 @@ def build_mil_bags_from_df(
     if indices is None:
         indices = list(range(len(df)))
 
-    if label_cols is None:
-        label_names: list[str] = []
-        return_single = False
-    elif isinstance(label_cols, str):
-        label_names = [label_cols]
-        return_single = True
-    else:
-        label_names = list(label_cols)
-        return_single = False
+    # if label_cols is None:
+    #     label_names: list[str] = []
+    #     return_single = False
+    # elif isinstance(label_cols, str):
+    #     label_names = [label_cols]
+    #     return_single = True
+    # else:
+    #     label_names = list(label_cols)
+    #     return_single = False
 
     chunk_audio: list[np.ndarray] = []
     bag_ids: list[tuple[int, int]] = []
-    labels_expanded: dict[str, list[Any]] = {label: [] for label in label_names}
+    expanded_indices: list[Any] = []
     for idx in indices:
         path = build_audio_path(
             df=df,
@@ -238,10 +240,7 @@ def build_mil_bags_from_df(
         chunks = split_audio_into_chunks(y=y, feature_cfg=feature_cfg, chunk_cfg=chunk_cfg)
         chunk_audio.extend(chunks)
         bag_ids.extend((idx, chunk_idx) for chunk_idx in range(len(chunks)))
-        if label_names:
-            row_labels = df.iloc[idx]
-            for label in label_names:
-                labels_expanded[label].extend([row_labels[label]] * len(chunks))
+        expanded_indices.extend([df.index[idx]] * len(chunks))
 
     bags = build_mil_feature_bags(
         chunks=chunk_audio,
@@ -251,10 +250,5 @@ def build_mil_bags_from_df(
         chunk_cfg=chunk_cfg,
         bag_ids=np.asarray(bag_ids, dtype=object),
     )
-    if not label_names:
-        return bags
-
-    labels_out = {label: np.asarray(values) for label, values in labels_expanded.items()}
-    if return_single:
-        return bags.bags, labels_out[label_names[0]], bags.feature_names
-    return bags.bags, labels_out, bags.feature_names
+    # Always return expanded indices for downstream expansion
+    return bags.bags, np.asarray(expanded_indices), bags.feature_names

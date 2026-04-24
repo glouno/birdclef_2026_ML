@@ -52,6 +52,7 @@ class FeatureConfig:
 class PoolingConfig:
     stats: tuple[StatName, ...] = ("mean", "std", "min", "max")
     percentiles: tuple[float, ...] = (10.0, 50.0, 90.0)
+    # percentiles: tuple[float, ...] = ()
     nan_fill_value: float = 0.0
 
     def __post_init__(self):

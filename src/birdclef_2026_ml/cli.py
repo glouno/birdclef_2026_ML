@@ -7,6 +7,9 @@ from birdclef_2026_ml.processing.preprocess import (
     preprocess_train_for_models,
     preprocess_soundscapes_for_models
 )
+from birdclef_2026_ml.models.model_training import (
+    save_train_val_mil_bags_streaming
+)
 from birdclef_2026_ml.paths import PATHS
 import pandas as pd
 import numpy as np
@@ -14,8 +17,26 @@ from pathlib import Path
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    # Optionally add more arguments for configs if needed
     parser = argparse.ArgumentParser(prog="birdclef", description="BirdCLEF data utilities")
     subparsers = parser.add_subparsers(dest="command")
+
+    parser_mil_bags = subparsers.add_parser(
+        "train-val-mil-bags",
+        help="Create MIL bags for train/val datasets and save all artifacts."
+    )
+    parser_mil_bags.add_argument(
+        "--input-audio-dir",
+        type=str,
+        default="train_audio_spectral_gating_dir",
+        help="Key in PATHS for input audio files directory."
+    )
+    parser_mil_bags.add_argument(
+        "--n-splits",
+        type=int,
+        default=50,
+        help="Number of splits"
+    )
 
     parser_profiles = subparsers.add_parser(
         "build-profiles",
@@ -148,6 +169,13 @@ def _run_spectral_gating(args):
     )
 
 
+def _run_train_val_mil_bags(args):
+    df = pd.read_parquet(PATHS["proc_train"])
+    save_train_val_mil_bags_streaming(df,
+                                      pathroot=args.input_audio_dir,
+                                      n_splits=args.n_splits)
+
+
 def main(argv=None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -156,7 +184,10 @@ def main(argv=None) -> int:
         parser.print_help()
         return 0
 
-    if args.command == "preprocess-train-for-models":
+    if args.command == "train-val-mil-bags":
+        _run_train_val_mil_bags(args)
+        return 0
+    elif args.command == "preprocess-train-for-models":
         output_path = _run_preprocess_train_for_models(args)
         print(f"Wrote: {output_path}")
         return 0

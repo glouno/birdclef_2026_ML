@@ -5,8 +5,8 @@ from birdclef_2026_ml.feature_engineering.configs import FeatureConfig
 
 
 def extract_mel_spectrogram_features(y: np.ndarray, cfg: FeatureConfig) -> dict[str, np.ndarray]:
-    """Extract frame-level mel spectrogram features for later class-specific weighting."""
-    if not cfg.include_mel_spectrogram:
+    """Extract mel spectrogram frame features and optional deltas from a waveform."""
+    if not (cfg.include_mel_spectrogram or cfg.include_delta or cfg.include_delta2):
         return {}
 
     mel_spectrogram = librosa.feature.melspectrogram(
@@ -17,7 +17,16 @@ def extract_mel_spectrogram_features(y: np.ndarray, cfg: FeatureConfig) -> dict[
         hop_length=cfg.hop_length,
     )
     mel_spectrogram_db = librosa.power_to_db(mel_spectrogram, ref=np.max)
-    return {"mel_spectrogram": mel_spectrogram_db}
+
+    features: dict[str, np.ndarray] = {}
+    if cfg.include_mel_spectrogram:
+        features["mel_spectrogram"] = mel_spectrogram_db
+        if cfg.include_delta:
+            features["mel_spectrogram_delta"] = librosa.feature.delta(mel_spectrogram_db, order=1)
+        if cfg.include_delta2:
+            features["mel_spectrogram_delta2"] = librosa.feature.delta(mel_spectrogram_db, order=2)
+
+    return features
 
 
 def extract_mfcc_features(y: np.ndarray, cfg: FeatureConfig) -> dict[str, np.ndarray]:
@@ -40,10 +49,10 @@ def extract_mfcc_features(y: np.ndarray, cfg: FeatureConfig) -> dict[str, np.nda
     features: dict[str, np.ndarray] = {}
     if cfg.include_mfcc:
         features["mfcc"] = mfcc
-    if cfg.include_delta:
-        features["mfcc_delta"] = librosa.feature.delta(mfcc, order=1)
-    if cfg.include_delta2:
-        features["mfcc_delta2"] = librosa.feature.delta(mfcc, order=2)
+        if cfg.include_delta:
+            features["mfcc_delta"] = librosa.feature.delta(mfcc, order=1)
+        if cfg.include_delta2:
+            features["mfcc_delta2"] = librosa.feature.delta(mfcc, order=2)
 
     return features
 

@@ -20,7 +20,8 @@ data/**
 birdclef-2026/
 
 # Models
-models/
+models/*
+/models/
 *.joblib
 
 # macOS
