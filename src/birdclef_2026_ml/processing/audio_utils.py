@@ -30,11 +30,11 @@ def get_path(pathroot: str, filename: str | Path | None = None) -> Path:
 def build_audio_path(
     df,
     idx: int,
-    pathroot: str,
+    pathroot: Path,
     filename_col: str = "filename",
 ) -> Path:
     filename = df[filename_col].iloc[idx]
-    return get_path(pathroot, filename)
+    return pathroot / filename
 
 
 def build_audio_path_row(
@@ -117,3 +117,9 @@ def load_config(path: Path):
     with open(path) as f:
         config = json.load(f)
     return config
+
+
+def save_config(obj, path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(obj.__dict__, f, indent=2)

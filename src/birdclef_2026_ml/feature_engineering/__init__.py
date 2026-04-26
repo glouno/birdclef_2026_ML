@@ -7,6 +7,7 @@ from birdclef_2026_ml.feature_engineering.init import (
     extract_features_from_row,
     get_feature_names,
     split_audio_into_chunks,
+    save_features_from_audio_dir
 )
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "extract_features_from_row",
     "get_feature_names",
     "split_audio_into_chunks",
+    "save_features_from_audio_dir",
 ]

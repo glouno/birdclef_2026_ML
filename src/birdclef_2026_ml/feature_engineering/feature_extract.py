@@ -1,7 +1,7 @@
 import numpy as np
 import librosa
 
-from birdclef_2026_ml.feature_engineering.configs import FeatureConfig
+from birdclef_2026_ml.configs import FeatureConfig
 
 
 def extract_mel_spectrogram_features(y: np.ndarray, cfg: FeatureConfig) -> dict[str, np.ndarray]:

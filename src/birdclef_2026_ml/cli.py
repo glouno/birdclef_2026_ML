@@ -1,25 +1,57 @@
 import argparse
-
-from birdclef_2026_ml.processing.audio_utils import build_audio_path, load_audio, load_config
-from birdclef_2026_ml.audio import apply_spectral_gating, build_profile
-from birdclef_2026_ml.feature_engineering.configs import SpectralGatingConfig
-from birdclef_2026_ml.processing.preprocess import (
-    preprocess_train_for_models,
-    preprocess_soundscapes_for_models
-)
-from birdclef_2026_ml.models.model_training import (
-    save_train_val_mil_bags_streaming
-)
-from birdclef_2026_ml.paths import PATHS
 import pandas as pd
 import numpy as np
 from pathlib import Path
+import joblib
+
+from birdclef_2026_ml.processing.audio_utils import build_audio_path, load_audio, load_config
+from birdclef_2026_ml.audio import apply_spectral_gating, build_profile
+from birdclef_2026_ml.configs import PipelineConfig, SpectralGatingConfig
+from birdclef_2026_ml.feature_engineering import save_features_from_audio_dir
+from birdclef_2026_ml.processing.preprocess import preprocess_datasets_for_models
+from birdclef_2026_ml.processing.feature_dataset_builder import build_memmap_from_chunks
+from birdclef_2026_ml.paths import PATHS, DATA_ROOT, MODELS_ROOT
+from birdclef_2026_ml.processing.data_split import split_audio_train_val, split_soundscapes_train_val
 
 
 def _build_parser() -> argparse.ArgumentParser:
     # Optionally add more arguments for configs if needed
     parser = argparse.ArgumentParser(prog="birdclef", description="BirdCLEF data utilities")
     subparsers = parser.add_subparsers(dest="command")
+
+    parser_build_feature_matrices = subparsers.add_parser(
+        "build-feature-matrices",
+        help="Build features matrices for train/validation datasets."
+    )
+    parser_build_feature_matrices.add_argument(
+        "--input-df",
+        type=str,
+        required=True,
+        help="Key in PATHS for preprocessed input df"
+    )
+    parser_build_feature_matrices.add_argument(
+        "--input-audio-dir",
+        type=str,
+        required=True,
+        help="Key in PATHS for input audio files directory."
+    )
+    parser_build_feature_matrices.add_argument(
+        "--input-features-dir",
+        type=str,
+        required=True,
+        help="Key in PATHS for input audio extracted features (.joblib) directory."
+    )
+    parser_build_feature_matrices.add_argument(
+        "--output-folder",
+        type=str,
+        required=True,
+        help="Folder inside paths.MODELS_ROOT where to save extracted matrices."
+    )
+    parser_build_feature_matrices.add_argument(
+        "--soundscapes",
+        action="store_true",
+        help="If set, process soundscapes; otherwise, process clean train audio."
+    )
 
     parser_mil_bags = subparsers.add_parser(
         "train-val-mil-bags",
@@ -28,7 +60,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser_mil_bags.add_argument(
         "--input-audio-dir",
         type=str,
-        default="train_audio_spectral_gating_dir",
+        required=True,
         help="Key in PATHS for input audio files directory."
     )
     parser_mil_bags.add_argument(
@@ -36,6 +68,12 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=50,
         help="Number of splits"
+    )
+    parser_mil_bags.add_argument(
+        "--features-pathroot",
+        type=str,
+        default=None,
+        help="Optional key in PATHS to precomputed per-audio feature .joblib files.",
     )
 
     parser_profiles = subparsers.add_parser(
@@ -86,41 +124,56 @@ def _build_parser() -> argparse.ArgumentParser:
     #     cmd_parser.add_argument("--input", type=str, default=None, help="Input CSV path")
     #     cmd_parser.add_argument("--output", type=str, default=None, help="Output Parquet path")
 
-    parser_train_models = subparsers.add_parser(
-        "preprocess-train-for-models",
-        help="Preprocess train.csv for modeling",
+    subparsers.add_parser(
+        "preprocess-datasets-for-models",
+        help="Preprocess train.csv and soundscapes for modeling",
     )
-    # add_common_args(parser_train_models)
 
-    parser_soundscapes_models = subparsers.add_parser(
-        "preprocess-soundscapes-for-models",
-        help="Preprocess train_soundscapes_labels.csv for modeling",
+    parser_mel = subparsers.add_parser(
+        "extract-all-features",
+        help="Extract all features for all audios in a PATHS directory and save .joblib files.",
     )
-    # add_common_args(parser_soundscapes_models)
+    parser_mel.add_argument(
+        "--input-df",
+        type=str,
+        required=True,
+        help="Key in PATHS for input audios dataframe.",
+    )
+    parser_mel.add_argument(
+        "--input-audio-dir",
+        type=str,
+        required=True,
+        help="Key in PATHS for input audios directory.",
+    )
+    parser_mel.add_argument(
+        "--output-audio-dir",
+        type=str,
+        required=True,
+        help="Optional key in PATHS for output directory. Defaults to data/processed/features.",
+    )
 
     return parser
 
 
-def _run_preprocess_train_for_models(args) -> Path:
-    input_path = PATHS["raw_train"]
-    output_path = PATHS["proc_train"]
+def _run_preprocess_datasets_for_models(args):
+    train = pd.read_csv(PATHS["raw_train"])
+    soundscapes = pd.read_csv(PATHS["raw_soundscapes"])
+    taxonomy = pd.read_csv(PATHS["taxonomy"])
 
-    df = pd.read_csv(input_path)
-    out = preprocess_train_for_models(df)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    out.to_parquet(output_path, index=False)
-    return output_path
+    train_proc, ss_proc, le_pl, le_cn = preprocess_datasets_for_models(train, soundscapes, taxonomy)
 
+    # Ensure output directories exist
+    for key in ("proc_train", "proc_soundscapes"):
+        PATHS[key].parent.mkdir(parents=True, exist_ok=True)
+    PATHS["label_encoders"].mkdir(parents=True, exist_ok=True)
 
-def _run_preprocess_soundscapes_for_models(args) -> Path:
-    input_path = PATHS["raw_soundscapes"]
-    output_path = PATHS["proc_soundscapes"]
-
-    df = pd.read_csv(input_path)
-    out = preprocess_soundscapes_for_models(df)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    out.to_parquet(output_path, index=False)
-    return output_path
+    # Save processed data
+    # train_proc.to_parquet(PATHS["proc_train"], index=False)
+    ss_proc.to_parquet(PATHS["proc_soundscapes"], index=False)
+    # Save label encoders
+    label_encoders_path = Path(PATHS["label_encoders"])
+    joblib.dump(le_pl, label_encoders_path / "primary_label.joblib")
+    joblib.dump(le_cn, label_encoders_path / "class_name.joblib")
 
 
 def _run_build_profiles(args):
@@ -134,7 +187,7 @@ def _run_build_profiles(args):
 
     profiles = []
     for idx in train.index:
-        y_clean_path = build_audio_path(train, idx, pathroot="train_audio_spectral_gating_dir")
+        y_clean_path = build_audio_path(train, idx, pathroot=PATHS["train_audio_spectral_gating_dir"])
         y_clean = load_audio(y_clean_path, spectral_gating_config.sr)
         profile = build_profile(
             y_clean,
@@ -169,11 +222,63 @@ def _run_spectral_gating(args):
     )
 
 
-def _run_train_val_mil_bags(args):
-    df = pd.read_parquet(PATHS["proc_train"])
-    save_train_val_mil_bags_streaming(df,
-                                      pathroot=args.input_audio_dir,
-                                      n_splits=args.n_splits)
+# def _run_train_val_mil_bags(args):
+#     df = pd.read_parquet(PATHS["proc_train"])
+#     save_train_val_mil_bags_streaming(df,
+#                                       pathroot=args.input_audio_dir,
+#                                       n_splits=args.n_splits,
+#                                       features_pathroot=args.features_pathroot)
+
+
+def _run_extract_all_features(args):
+    pipeline_cfg = PipelineConfig()
+    df = pd.read_parquet(PATHS[args.input_df])
+
+    n_saved = save_features_from_audio_dir(
+        df=df,
+        input_path=PATHS[args.input_audio_dir],
+        config_path=DATA_ROOT / "configs",
+        pipeline_cfg=pipeline_cfg,
+        output_path=PATHS[args.output_audio_dir],
+    )
+
+
+def _run_build_feature_matrices(args):
+    df = pd.read_parquet(PATHS[args.input_df])
+
+    pipeline_cfg = PipelineConfig()
+    pathroot = PATHS[args.input_audio_dir]
+    features_pathroot = PATHS[args.input_features_dir]
+
+    if args.soundscapes:
+        df_train, df_val = split_soundscapes_train_val(df)
+        subsets = {
+            "train_soundscapes": df_train,
+            "val_soundscapes": df_val,
+        }
+    else:
+        df_train, df_val = split_audio_train_val(df)
+        subsets = {
+            "train": df_train,
+            "val": df_val,
+        }
+
+    for name, df_subset in subsets.items():
+        print(f"Started processing {name} subset")
+
+        out_path = MODELS_ROOT / args.output_folder / name
+
+        build_memmap_from_chunks(
+            df_subset,
+            pipeline_cfg=pipeline_cfg,
+            pathroot=pathroot,
+            filename_col="filename",
+            features_pathroot=features_pathroot,
+            out_instances_path=out_path,
+            soundscapes=args.soundscapes,
+        )
+
+        print(f"Finished processing {name} subset")
 
 
 def main(argv=None) -> int:
@@ -184,16 +289,11 @@ def main(argv=None) -> int:
         parser.print_help()
         return 0
 
-    if args.command == "train-val-mil-bags":
-        _run_train_val_mil_bags(args)
+    if args.command == "build-feature-matrices":
+        _run_build_feature_matrices(args)
         return 0
-    elif args.command == "preprocess-train-for-models":
-        output_path = _run_preprocess_train_for_models(args)
-        print(f"Wrote: {output_path}")
-        return 0
-    elif args.command == "preprocess-soundscapes-for-models":
-        output_path = _run_preprocess_soundscapes_for_models(args)
-        print(f"Wrote: {output_path}")
+    elif args.command == "preprocess-datasets-for-models":
+        _run_preprocess_datasets_for_models(args)
         return 0
     elif args.command == "spectral-gating":
         _run_spectral_gating(args)
@@ -201,6 +301,9 @@ def main(argv=None) -> int:
         return 0
     elif args.command == "build-profiles":
         _run_build_profiles(args)
+        return 0
+    elif args.command == "extract-all-features":
+        _run_extract_all_features(args)
         return 0
     else:
         parser.error(f"Unknown command: {args.command}")

@@ -1,7 +1,8 @@
-from birdclef_2026_ml.feature_engineering.configs import SpectralGatingConfig
 import numpy as np
 import librosa
 from scipy.ndimage import median_filter
+
+from birdclef_2026_ml.configs import SpectralGatingConfig
 
 
 def spectral_gating_snr(

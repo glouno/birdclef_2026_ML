@@ -5,7 +5,7 @@ import numpy as np
 from sklearn.base import clone
 from sklearn.preprocessing import LabelEncoder
 
-from birdclef_2026_ml.feature_engineering.configs import MILConfig
+from birdclef_2026_ml.configs import MILConfig
 from birdclef_2026_ml.feature_engineering.feature_reweighting import (
     build_feature_scale_vector,
     load_weights,

@@ -45,3 +45,12 @@ def get_sliding_window_intervals(
         start = max(0, end - window_size)
         windows.append((start, end))
     return windows
+
+
+def count_nb_chunks(df, chunk_cfg):
+    C = chunk_cfg.chunk_size_s
+    S = chunk_cfg.step_size_s
+    total_chunks = (
+        np.ceil((np.maximum(C, df["duration"]) - C) / S).astype(int) + 1
+    ).sum()
+    return total_chunks

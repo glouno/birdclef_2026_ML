@@ -1,6 +1,6 @@
 
 # Spectral gating config dataclass
-from typing import Optional
+from typing import Optional, Literal
 from birdclef_2026_ml.constants import SAMPLE_RATE
 from typing import Literal
 from dataclasses import dataclass, field
@@ -32,10 +32,10 @@ class FeatureConfig:
     include_waveform_stats: bool = False
     include_mel_spectrogram: bool = True
     include_mfcc: bool = False
-    include_delta: bool = False
-    include_delta2: bool = False
-    include_spectral: bool = False
-    include_energy: bool = False
+    include_delta: bool = True
+    include_delta2: bool = True
+    include_spectral: bool = True
+    include_energy: bool = True
 
     def __post_init__(self):
         if self.n_fft <= 0 or self.hop_length <= 0:
@@ -50,9 +50,10 @@ class FeatureConfig:
 
 @dataclass(frozen=False)
 class PoolingConfig:
+    pooling_mode: Literal["global", "chunk"] = "chunk"
     stats: tuple[StatName, ...] = ("mean", "std", "min", "max")
-    percentiles: tuple[float, ...] = (10.0, 50.0, 90.0)
-    # percentiles: tuple[float, ...] = ()
+    # percentiles: tuple[float, ...] = (10.0, 50.0, 90.0)
+    percentiles: tuple[float, ...] = ()
     nan_fill_value: float = 0.0
 
     def __post_init__(self):
@@ -74,14 +75,6 @@ class ChunkConfig:
 
 
 @dataclass(frozen=False)
-class PipelineConfig:
-    feature: FeatureConfig = field(default_factory=FeatureConfig)
-    pooling: PoolingConfig = field(default_factory=PoolingConfig)
-    chunk: ChunkConfig = field(default_factory=ChunkConfig)
-    pooling_mode: Literal["global", "chunk"] = "global"
-
-
-@dataclass(frozen=False)
 class MILConfig:
     window_size_s: float = 1.0  # seconds
     step_size_s: float = 0.5    # seconds
@@ -92,3 +85,12 @@ class MILConfig:
             raise ValueError("window_size_s and step_size_s must be > 0")
         if self.pooling not in ("max", "mean", "logsumexp"):
             raise ValueError("Invalid pooling method for MILConfig")
+
+
+# TODO: handle edge cases here (e.g. pooling = chunk but chunk_cfg is not passed)
+@dataclass(frozen=False)
+class PipelineConfig:
+    feature: FeatureConfig = field(default_factory=FeatureConfig)
+    pooling: PoolingConfig = field(default_factory=PoolingConfig)
+    chunk: ChunkConfig = field(default_factory=ChunkConfig)
+    mil: MILConfig = field(default_factory=MILConfig)

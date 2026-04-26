@@ -1,20 +1,18 @@
-import json
 import numpy as np
 import librosa
+from pathlib import Path
 
-from birdclef_2026_ml.paths import get_path
 from birdclef_2026_ml.processing.audio_utils import load_audio, build_audio_path, save_ogg
-# Import SpectralGatingConfig
 from birdclef_2026_ml.audio.spectral_gating import spectral_gating_snr
-from birdclef_2026_ml.feature_engineering.configs import SpectralGatingConfig
+from birdclef_2026_ml.configs import SpectralGatingConfig
 from birdclef_2026_ml.audio.freq_bands import weighted_time_pooling
 
 
 def apply_spectral_gating(
     df,
     config: SpectralGatingConfig,
-    input_root: str = "train_audio_dir",
-    output_root: str = "train_audio_spectral_gating_dir",
+    input_root: Path,
+    output_root: Path,
     filename_col: str = "filename",
 ):
     """

@@ -1,6 +1,7 @@
 import ast
 import numpy as np
 import pandas as pd
+from sklearn.preprocessing import LabelEncoder
 
 from birdclef_2026_ml.processing.audio_utils import get_duration
 
@@ -72,23 +73,62 @@ def preprocess_soundscape(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def preprocess_train_for_models(df: pd.DataFrame,
-                                trim_percentile: float = 5.0) -> pd.DataFrame:
-    """Preprocessing after EDA"""
+def preprocess_datasets_for_models(train: pd.DataFrame,
+                                   soundscapes: pd.DataFrame,
+                                   taxonomy: pd.DataFrame):
 
-    df = preprocess_train(df)
+    # 1. Clean train audio
+    train = preprocess_train(train)
 
     # Remove audios that are too short/too long
-    df["duration"] = df["filename"].apply(get_duration)
-    p5, p95 = np.percentile(df["duration"], [trim_percentile, 100 - trim_percentile])
-    df = df[(df["duration"] > p5) & (df["duration"] < p95)]
+    # train["duration"] = train["filename"].apply(get_duration)
+    # p5, p95 = np.percentile(train["duration"], [5., 95.])
+    # train = train[(train["duration"] > p5) & (train["duration"] < p95)]
 
-    return df
+    # String labels to int
+    le_primary_label = LabelEncoder().fit(taxonomy["primary_label"])
+    le_class_name = LabelEncoder().fit(taxonomy["class_name"])
 
+    train = train.assign(
+        primary_label_int=np.asarray(
+            le_primary_label.transform(train["primary_label"]),
+            dtype=np.float32
+        ),
+        class_name_int=np.asarray(
+            le_class_name.transform(train["class_name"]),
+            dtype=np.float32
+        )
+    )
 
-def preprocess_soundscapes_for_models(df: pd.DataFrame) -> pd.DataFrame:
-    """Preprocessing after EDA"""
+    # 2. Soundscapes
+    soundscapes = preprocess_soundscape(soundscapes)
 
-    df = preprocess_soundscape(df)
+    # map primary_label -> class_name
+    class_map = taxonomy.set_index("primary_label")["class_name"]
+    exploded = soundscapes["primary_label_list"].explode()
+    class_name_list = (
+        exploded
+        .map(class_map)
+        .groupby(level=0)
+        .agg(list)
+    )
 
-    return df
+    soundscapes = soundscapes.assign(
+        class_name_list=class_name_list
+    )
+
+    # primary_label_int_list
+    soundscapes = soundscapes.assign(
+        primary_label_int_list=soundscapes["primary_label_list"].apply(
+            lambda x: np.asarray(le_primary_label.transform(x), dtype=np.float32).tolist()
+        )
+    )
+
+    # class_name_int_list
+    soundscapes = soundscapes.assign(
+        class_name_int_list=soundscapes["class_name_list"].apply(
+            lambda x: np.asarray(np.unique(le_class_name.transform(x)), dtype=np.float32).tolist()
+        )
+    )
+
+    return train, soundscapes, le_primary_label, le_class_name

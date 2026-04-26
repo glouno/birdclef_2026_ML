@@ -16,7 +16,7 @@ from sklearn.metrics import (
 from sklearn.preprocessing import MultiLabelBinarizer, label_binarize
 
 from birdclef_2026_ml.feature_engineering import build_feature_vector, build_mil_feature_matrix
-from birdclef_2026_ml.feature_engineering.configs import FeatureConfig, MILConfig, PoolingConfig
+from birdclef_2026_ml.configs import PipelineConfig
 from birdclef_2026_ml.models.one_vs_rest_models import OneVsRestArtifacts, predict_proba_one_vs_rest
 from birdclef_2026_ml.processing.audio_utils import get_path, load_audio
 
@@ -125,34 +125,24 @@ def plot_confusion_matrix(y_true, y_pred, labels=None, ax=None, normalize="true"
 def _build_soundscape_segment_input(
     y: np.ndarray,
     artifacts: OneVsRestArtifacts,
-    feature_cfg: FeatureConfig,
-    pooling_cfg: PoolingConfig,
-    mil_cfg: MILConfig | None,
+    pipeline_cfg: PipelineConfig
 ) -> tuple[np.ndarray, list[str]]:
     if artifacts.mil_mode:
-        if mil_cfg is None:
-            raise ValueError("MIL evaluation requires mil_cfg")
         return build_mil_feature_matrix(
             y=y,
-            feature_cfg=feature_cfg,
-            pooling_cfg=pooling_cfg,
-            mil_cfg=mil_cfg,
+            pipeline_cfg=pipeline_cfg
         )
 
     return build_feature_vector(
         y=y,
-        feature_cfg=feature_cfg,
-        pooling_mode="global",
-        pooling_cfg=pooling_cfg,
-        chunk_cfg=None,
+        pipeline_cfg=pipeline_cfg
     )
 
 
 def evaluate_soundscapes_multilabel(
     soundscapes,
     artifacts: OneVsRestArtifacts,
-    feature_cfg: FeatureConfig,
-    pooling_cfg: PoolingConfig,
+    pipeline_cfg: PipelineConfig,
     target_name: str = "primary_label",
     label_col: str = "primary_label_list",
     filename_col: str = "filename",
@@ -160,7 +150,6 @@ def evaluate_soundscapes_multilabel(
     end_col: str = "end_sec",
     pathroot: str = "train_soundscapes_dir",
     threshold: float = 0.5,
-    mil_cfg: MILConfig | None = None,
 ) -> dict[str, Any]:
     """Evaluate multilabel soundscape predictions from annotated segments.
 
@@ -175,7 +164,7 @@ def evaluate_soundscapes_multilabel(
     if missing_cols:
         raise ValueError(f"Missing required soundscape columns: {sorted(missing_cols)}")
 
-    mil_cfg = artifacts.mil_config if mil_cfg is None else mil_cfg
+    mil_cfg = artifacts.mil_config
     if artifacts.mil_mode and mil_cfg is None:
         raise ValueError("MIL artifacts require mil_cfg for evaluation")
 
@@ -215,7 +204,7 @@ def evaluate_soundscapes_multilabel(
         audio_path = get_path(pathroot, filename)
         y = load_audio(
             filepath=audio_path,
-            sr=feature_cfg.sr,
+            sr=pipeline_cfg.feature.sr,
             offset=start_seconds,
             duration=duration_seconds,
         )
@@ -226,9 +215,7 @@ def evaluate_soundscapes_multilabel(
         segment_input, feature_names = _build_soundscape_segment_input(
             y=np.asarray(y, dtype=float),
             artifacts=artifacts,
-            feature_cfg=feature_cfg,
-            pooling_cfg=pooling_cfg,
-            mil_cfg=mil_cfg,
+            pipeline_cfg=pipeline_cfg
         )
         if feature_names_ref is None:
             feature_names_ref = list(feature_names)

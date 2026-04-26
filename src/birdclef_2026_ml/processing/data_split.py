@@ -1,10 +1,10 @@
+from typing import Any, cast
+import pandas as pd
+
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MultiLabelBinarizer
-from typing import Any, cast
 
 from iterstrat.ml_stratifiers import MultilabelStratifiedShuffleSplit
-
-import pandas as pd
 
 
 def split_audio_train_val(df) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -25,6 +25,8 @@ def split_audio_train_val(df) -> tuple[pd.DataFrame, pd.DataFrame]:
 
     train_final = pd.concat([train_part, rare])
     return train_final, val_part
+
+# TODO: Rewrite this function to apply GroupKFold instead (see what is going on with classes)
 
 
 def split_soundscapes_train_val(soundscapes, test_size=0.2, random_state=42):

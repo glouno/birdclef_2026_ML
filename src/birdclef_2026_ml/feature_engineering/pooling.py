@@ -2,7 +2,7 @@
 import numpy as np
 from typing import Literal
 
-from birdclef_2026_ml.feature_engineering.configs import PoolingConfig, ChunkConfig, FeatureConfig
+from birdclef_2026_ml.configs import PipelineConfig, PoolingConfig
 from birdclef_2026_ml.feature_engineering.chunking import (
     feature_frame_rate_hz,
     get_sliding_window_intervals,
@@ -104,52 +104,45 @@ def sliding_window_pool(
 
 def pool_feature_dict(
     features_dict: dict[str, np.ndarray],
-    pooling_cfg: PoolingConfig,
-    mode: Literal["global", "chunk"],
-    feature_cfg: FeatureConfig,
-    chunk_cfg: ChunkConfig | None = None,
+    pipeline_cfg: PipelineConfig
 ) -> dict[str, np.ndarray]:
     """Pool each feature matrix in a dict using global or chunk mode."""
     pooled: dict[str, np.ndarray] = {}
 
-    if mode == "global":
+    if pipeline_cfg.pooling.pooling_mode == "global":
         for name, mat in features_dict.items():
-            pooled[name] = global_pool(mat, pooling_cfg)
+            pooled[name] = global_pool(mat, pipeline_cfg.pooling)
         return pooled
 
-    if mode == "chunk":
-        if chunk_cfg is None:
-            raise ValueError("chunk_cfg is required for chunk mode")
+    if pipeline_cfg.pooling.pooling_mode == "chunk":
         for name, mat in features_dict.items():
-            frame_rate_hz = feature_frame_rate_hz(name, feature_cfg.sr, feature_cfg.hop_length)
+            frame_rate_hz = feature_frame_rate_hz(name, pipeline_cfg.feature.sr, pipeline_cfg.feature.hop_length)
             pooled[name] = sliding_window_pool(
                 feature_matrix=mat,
-                pooling_cfg=pooling_cfg,
-                window_size_s=chunk_cfg.chunk_size_s,
-                step_size_s=chunk_cfg.step_size_s,
+                pooling_cfg=pipeline_cfg.pooling,
+                window_size_s=pipeline_cfg.chunk.chunk_size_s,
+                step_size_s=pipeline_cfg.chunk.step_size_s,
                 frame_rate_hz=frame_rate_hz,
             )
         return pooled
 
-    raise ValueError(f"Unsupported pooling mode: {mode}")
+    return pooled
 
 
 def pool_feature_dict_sliding_windows(
     features_dict: dict[str, np.ndarray],
-    pooling_cfg: PoolingConfig,
-    feature_cfg: FeatureConfig,
-    window_size_s: float,
-    step_size_s: float,
+    pipeline_cfg: PipelineConfig,
 ) -> dict[str, np.ndarray]:
     """Pool each feature matrix into sliding-window instances for MIL-style inputs."""
     pooled: dict[str, np.ndarray] = {}
+
     for name, mat in features_dict.items():
-        frame_rate_hz = feature_frame_rate_hz(name, feature_cfg.sr, feature_cfg.hop_length)
+        frame_rate_hz = feature_frame_rate_hz(name, pipeline_cfg.feature.sr, pipeline_cfg.feature.hop_length)
         pooled[name] = sliding_window_pool(
             feature_matrix=mat,
-            pooling_cfg=pooling_cfg,
-            window_size_s=window_size_s,
-            step_size_s=step_size_s,
+            pooling_cfg=pipeline_cfg.pooling,
+            window_size_s=pipeline_cfg.mil.window_size_s,
+            step_size_s=pipeline_cfg.mil.step_size_s,
             frame_rate_hz=frame_rate_hz,
         )
     return pooled

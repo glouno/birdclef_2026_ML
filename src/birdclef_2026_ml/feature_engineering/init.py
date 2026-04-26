@@ -1,21 +1,60 @@
-from typing import Literal
-import librosa
+from pathlib import Path
+import gc
 import numpy as np
+import joblib
 
-from birdclef_2026_ml.processing.audio_utils import build_audio_path, get_path, load_audio
-from birdclef_2026_ml.feature_engineering.configs import ChunkConfig, FeatureConfig, MILConfig, PoolingConfig
-from birdclef_2026_ml.feature_engineering.utils import pad_short_audio, _percentile_label
+from birdclef_2026_ml.processing.audio_utils import build_audio_path, get_path, load_audio, save_config
+from birdclef_2026_ml.configs import PipelineConfig, ChunkConfig
+from birdclef_2026_ml.feature_engineering.utils import (
+    pad_short_audio,
+    _percentile_label,
+    joblib_to_frame_features,
+)
 from birdclef_2026_ml.feature_engineering.feature_extract import extract_all_frame_features
 from birdclef_2026_ml.feature_engineering.pooling import pool_feature_dict, pool_feature_dict_sliding_windows
 from birdclef_2026_ml.feature_engineering.chunking import get_sliding_window_intervals
+# from birdclef_2026_ml.paths import PATHS
+
+
+def save_features_from_audio_dir(
+    df,
+    input_path: Path,
+    pipeline_cfg: PipelineConfig,
+    config_path: Path,
+    output_path: Path,
+) -> int:
+    """Compute enabled non-aggregated frame features and save them per feature folder."""
+
+    pipeline_cfg.feature = pipeline_cfg.feature
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    filenames = df["filename"].unique()
+    total = len(filenames)
+
+    save_config(pipeline_cfg.feature, config_path / "features" / "feature_config.json")
+
+    for i, filename in enumerate(filenames, start=1):
+        y = load_audio(input_path / filename, sr=pipeline_cfg.feature.sr)
+        features = extract_all_frame_features(y, pipeline_cfg.feature)
+
+        saved_count = 0
+        out_path = (output_path / filename).with_suffix(".joblib")
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        joblib.dump(features, out_path)
+        saved_count += 1
+
+        print(f"[{i}/{total}] saved {saved_count} feature arrays for {filename}")
+
+        del y
+        del features
+        gc.collect()
+
+    return total
 
 
 def get_feature_names(
     features_dict: dict[str, np.ndarray],
-    pooling_cfg: PoolingConfig,
-    pooling_mode: Literal["global", "chunk"],
-    feature_cfg: FeatureConfig,
-    chunk_cfg: ChunkConfig | None = None,
+    pipeline_cfg: PipelineConfig,
 ) -> list[str]:
     """Return feature names in the exact same order as pooled outputs."""
     names: list[str] = []
@@ -25,67 +64,64 @@ def get_feature_names(
         n_dims = 1 if x.ndim == 1 else int(x.shape[0])
 
         base_names: list[str] = []
-        for stat in pooling_cfg.stats:
+        for stat in pipeline_cfg.pooling.stats:
             for dim_idx in range(1, n_dims + 1):
                 base_names.append(f"{feature_name}_{dim_idx:02d}_{stat}")
 
         for dim_idx in range(1, n_dims + 1):
-            for percentile in pooling_cfg.percentiles:
+            for percentile in pipeline_cfg.pooling.percentiles:
                 p_label = _percentile_label(percentile)
                 base_names.append(f"{feature_name}_{dim_idx:02d}_p{p_label}")
 
-        if pooling_mode == "global":
+        if pipeline_cfg.pooling.pooling_mode == "global":
             names.extend(base_names)
-        elif pooling_mode == "chunk":
-            if chunk_cfg is None:
-                raise ValueError("chunk_cfg is required for chunk mode")
+
+        if pipeline_cfg.pooling.pooling_mode == "chunk":
             names.extend(base_names)
-        else:
-            raise ValueError(f"Unsupported pooling mode: {pooling_mode}")
 
     return names
 
 
 def build_feature_vector(
-    y: np.ndarray,
-    feature_cfg: FeatureConfig,
-    pooling_mode: Literal["global", "chunk"],
-    pooling_cfg: PoolingConfig,
-    chunk_cfg: ChunkConfig | None = None,
+    y: np.ndarray | None,
+    pipeline_cfg: PipelineConfig,
+    frame_features: dict[str, np.ndarray] | None = None,
+    frame_features_joblib_path: Path | None = None,
 ) -> tuple[np.ndarray, list[str]]:
     """Build pooled features and aligned feature names.
 
     - global mode: returns 1D vector
     - chunk mode: returns 2D matrix (n_chunks, n_features)
     """
-    y_arr = np.asarray(y, dtype=float).ravel()
-    if y_arr.size == 0:
-        raise ValueError("y must contain at least one sample")
+    if frame_features is not None and frame_features_joblib_path is not None:
+        raise ValueError("Provide either frame_features or frame_features_joblib_path, not both.")
 
-    # Pad audio (prepend/append/prepend half and append half) for audios shorter than chunks length
-    if pooling_mode == "chunk":
-        if chunk_cfg is None:
-            raise ValueError("chunk_cfg is required for chunk mode")
-        y_arr = pad_short_audio(y_arr, chunk_cfg, feature_cfg)
+    if frame_features is not None:
+        frame_features_resolved = joblib_to_frame_features(frame_features)
+    elif frame_features_joblib_path is not None:
+        frame_features_resolved = joblib_to_frame_features(frame_features_joblib_path)
+    else:
+        if y is None:
+            raise ValueError("y is required when precomputed frame features are not provided.")
+        y_arr = np.asarray(y, dtype=float).ravel()
+        if y_arr.size == 0:
+            raise ValueError("y must contain at least one sample")
+        # Pad audio for chunk mode before frame-level extraction.
+        if pipeline_cfg.pooling.pooling_mode == "chunk":
+            y_arr = pad_short_audio(y_arr, pipeline_cfg.chunk.chunk_size_s, pipeline_cfg.feature.sr)
+        frame_features_resolved = extract_all_frame_features(y_arr, pipeline_cfg.feature)
 
-    frame_features = extract_all_frame_features(y_arr, feature_cfg)
     pooled = pool_feature_dict(
-        features_dict=frame_features,
-        pooling_cfg=pooling_cfg,
-        mode=pooling_mode,
-        feature_cfg=feature_cfg,
-        chunk_cfg=chunk_cfg,
+        features_dict=frame_features_resolved,
+        pipeline_cfg=pipeline_cfg
     )
 
     feature_names = get_feature_names(
-        features_dict=frame_features,
-        pooling_cfg=pooling_cfg,
-        pooling_mode=pooling_mode,
-        feature_cfg=feature_cfg,
-        chunk_cfg=chunk_cfg,
+        features_dict=frame_features_resolved,
+        pipeline_cfg=pipeline_cfg
     )
 
-    if pooling_mode == "global":
+    if pipeline_cfg.pooling.pooling_mode == "global":
         vectors: list[np.ndarray] = [np.asarray(v, dtype=float).ravel() for v in pooled.values()]
         if vectors:
             feature_vector = np.concatenate(vectors)
@@ -98,9 +134,6 @@ def build_feature_vector(
                 f"({feature_vector.size} != {len(feature_names)})."
             )
         return feature_vector, feature_names
-
-    if pooling_mode != "chunk":
-        raise ValueError(f"Unsupported pooling mode: {pooling_mode}")
 
     chunk_mats: list[np.ndarray] = []
     n_chunks = 0
@@ -116,7 +149,7 @@ def build_feature_vector(
     if not chunk_mats:
         return np.empty((0, 0), dtype=float), feature_names
 
-    fill_value = float(pooling_cfg.nan_fill_value)
+    fill_value = float(pipeline_cfg.pooling.nan_fill_value)
     rows: list[np.ndarray] = []
     for chunk_idx in range(n_chunks):
         row_parts: list[np.ndarray] = []
@@ -139,49 +172,69 @@ def build_feature_vector(
 
 def split_audio_into_chunks(
     y: np.ndarray,
-    feature_cfg: FeatureConfig,
-    chunk_cfg: ChunkConfig,
+    pipeline_cfg: PipelineConfig,
 ) -> list[np.ndarray]:
     """Split audio into fixed-duration chunks using the shared chunking logic."""
     y_arr = np.asarray(y, dtype=float).ravel()
     if y_arr.size == 0:
         return []
 
-    y_arr = pad_short_audio(y_arr, chunk_cfg, feature_cfg)
+    pipeline_cfg.feature = pipeline_cfg.feature
+    pipeline_cfg.chunk = pipeline_cfg.chunk
+
+    y_arr = pad_short_audio(y_arr, pipeline_cfg.chunk.chunk_size_s, pipeline_cfg.feature.sr)
     chunk_intervals = get_sliding_window_intervals(
         n_frames=y_arr.shape[0],
-        window_size_s=chunk_cfg.chunk_size_s,
-        step_size_s=chunk_cfg.step_size_s,
-        frame_rate_hz=float(feature_cfg.sr),
+        window_size_s=pipeline_cfg.chunk.chunk_size_s,
+        step_size_s=pipeline_cfg.chunk.step_size_s,
+        frame_rate_hz=float(pipeline_cfg.feature.sr),
     )
     return [y_arr[start:end] for start, end in chunk_intervals if end > start]
 
 
 def build_mil_feature_matrix(
-    y: np.ndarray,
-    feature_cfg: FeatureConfig,
-    pooling_cfg: PoolingConfig,
-    mil_cfg: MILConfig,
+    y: np.ndarray | None,
+    pipeline_cfg: PipelineConfig,
+    # pipeline_cfg.feature: FeatureConfig,
+    # pipeline_cfg.pooling: PoolingConfig,
+    # mil_cfg: MILConfig,
+    frame_features: dict[str, np.ndarray] | None = None,
+    frame_features_joblib_path: str | Path | None = None,
 ) -> tuple[np.ndarray, list[str]]:
     """Build one MIL bag from one chunk of audio."""
-    y_arr = np.asarray(y, dtype=float).ravel()
-    if y_arr.size == 0:
-        raise ValueError("y must contain at least one sample")
+    if frame_features is not None and frame_features_joblib_path is not None:
+        raise ValueError("Provide either frame_features or frame_features_joblib_path, not both.")
 
-    frame_features = extract_all_frame_features(y_arr, feature_cfg)
+    pipeline_cfg.feature = pipeline_cfg.feature
+    pipeline_cfg.pooling = pipeline_cfg.pooling
+    mil_cfg = pipeline_cfg.mil
+
+    if frame_features is not None:
+        frame_features_resolved = joblib_to_frame_features(frame_features)
+    elif frame_features_joblib_path is not None:
+        frame_features_resolved = joblib_to_frame_features(frame_features_joblib_path)
+    else:
+        if y is None:
+            raise ValueError("y is required when precomputed frame features are not provided.")
+        y_arr = np.asarray(y, dtype=float).ravel()
+        if y_arr.size == 0:
+            raise ValueError("y must contain at least one sample")
+        frame_features_resolved = extract_all_frame_features(y_arr, pipeline_cfg.feature)
+
     pooled = pool_feature_dict_sliding_windows(
-        features_dict=frame_features,
-        pooling_cfg=pooling_cfg,
-        feature_cfg=feature_cfg,
-        window_size_s=mil_cfg.window_size_s,
-        step_size_s=mil_cfg.step_size_s,
+        features_dict=frame_features_resolved,
+        pipeline_cfg=pipeline_cfg,
+        # window_size_s=mil_cfg.window_size_s,
+        # step_size_s=mil_cfg.step_size_s,
     )
     feature_names = get_feature_names(
-        features_dict=frame_features,
-        pooling_cfg=pooling_cfg,
-        pooling_mode="chunk",
-        feature_cfg=feature_cfg,
-        chunk_cfg=ChunkConfig(chunk_size_s=mil_cfg.window_size_s, step_size_s=mil_cfg.window_size_s),
+        features_dict=frame_features_resolved,
+        pipeline_cfg=PipelineConfig(
+            feature=pipeline_cfg.feature,
+            pooling=pipeline_cfg.pooling,
+            chunk=ChunkConfig(chunk_size_s=mil_cfg.window_size_s, step_size_s=mil_cfg.window_size_s),
+            mil=mil_cfg
+        )
     )
 
     window_mats: list[np.ndarray] = []
@@ -198,7 +251,7 @@ def build_mil_feature_matrix(
     if not window_mats:
         return np.empty((0, 0), dtype=float), feature_names
 
-    fill_value = float(pooling_cfg.nan_fill_value)
+    fill_value = float(pipeline_cfg.pooling.nan_fill_value)
     rows: list[np.ndarray] = []
     for window_idx in range(n_windows):
         row_parts: list[np.ndarray] = []
@@ -220,60 +273,63 @@ def build_mil_feature_matrix(
 
 def extract_features_from_path(
     audio_path: str,
-    feature_cfg: FeatureConfig,
-    pooling_mode: Literal["global", "chunk"],
-    pooling_cfg: PoolingConfig,
-    chunk_cfg: ChunkConfig | None = None,
-    pathroot: str | None = None,
+    pipeline_cfg: PipelineConfig,
+    pathroot: Path,
+    features_pathroot: Path | None,
 ) -> tuple[np.ndarray, list[str]]:
     """Load one audio file and return pooled features + names."""
-    full_path = get_path(pathroot, audio_path) if pathroot is not None else audio_path
-    y = load_audio(full_path, sr=feature_cfg.sr)
+
+    y = None
+    features_joblib_path = None
+    if features_pathroot is not None:
+        features_joblib_path = features_pathroot / Path(audio_path).with_suffix(".joblib")
+    else:
+        y = load_audio(pathroot / audio_path, sr=pipeline_cfg.feature.sr)
+
     return build_feature_vector(
         y=y,
-        feature_cfg=feature_cfg,
-        pooling_mode=pooling_mode,
-        pooling_cfg=pooling_cfg,
-        chunk_cfg=chunk_cfg,
+        pipeline_cfg=pipeline_cfg,
+        frame_features_joblib_path=features_joblib_path,
     )
 
 
 def extract_features_from_row(
     df,
     idx: int,
-    feature_cfg: FeatureConfig,
-    pooling_mode: Literal["global", "chunk"],
-    pooling_cfg: PoolingConfig,
-    chunk_cfg: ChunkConfig | None = None,
-    pathroot: str = "train_audio_dir",
+    *,
+    pipeline_cfg: PipelineConfig,
+    pathroot: Path,
     filename_col: str = "filename",
+    features_pathroot: Path | None,
 ) -> tuple[np.ndarray, list[str]]:
     """Load one audio file and return pooled features + names."""
-    path = build_audio_path(
-        df=df,
-        idx=idx,
-        pathroot=pathroot,
-        filename_col=filename_col,
-    )
-    y = load_audio(path, sr=feature_cfg.sr)
+    y = None
+    features_joblib_path = None
+    if features_pathroot is not None:
+        features_joblib_path = features_pathroot / df[filename_col].iloc[idx].with_suffix(".joblib")
+    else:
+        path = build_audio_path(
+            df=df,
+            idx=idx,
+            pathroot=pathroot,
+            filename_col=filename_col,
+        )
+        y = load_audio(path, sr=pipeline_cfg.feature.sr)
     return build_feature_vector(
         y=y,
-        feature_cfg=feature_cfg,
-        pooling_mode=pooling_mode,
-        pooling_cfg=pooling_cfg,
-        chunk_cfg=chunk_cfg,
+        pipeline_cfg=pipeline_cfg,
+        frame_features_joblib_path=features_joblib_path,
     )
 
 
 def build_feature_matrix_from_df(
     df,
-    feature_cfg: FeatureConfig,
-    pooling_mode: Literal["global", "chunk"],
-    pooling_cfg: PoolingConfig,
-    chunk_cfg: ChunkConfig | None = None,
+    *,
+    pipeline_cfg: PipelineConfig,
     indices: list[int] | None = None,
-    pathroot: str = "train_audio_dir",
+    pathroot: Path,
     filename_col: str = "filename",
+    features_pathroot: Path | None = None,
 ) -> tuple[np.ndarray, list[str]]:
     """Build a 2D feature matrix from dataframe rows.
 
@@ -293,15 +349,13 @@ def build_feature_matrix_from_df(
         vec, names = extract_features_from_row(
             df=df,
             idx=idx,
-            feature_cfg=feature_cfg,
-            pooling_mode=pooling_mode,
-            pooling_cfg=pooling_cfg,
-            chunk_cfg=chunk_cfg,
+            pipeline_cfg=pipeline_cfg,
             pathroot=pathroot,
             filename_col=filename_col,
+            features_pathroot=features_pathroot,
         )
 
-        if pooling_mode == "global":
+        if pipeline_cfg.pooling.pooling_mode == "global":
             if feature_names_ref is None:
                 feature_names_ref = names
             elif names != feature_names_ref:
@@ -312,12 +366,6 @@ def build_feature_matrix_from_df(
 
             vectors.append(np.asarray(vec, dtype=float).ravel())
             continue
-
-        if pooling_mode != "chunk":
-            raise ValueError(f"Unsupported pooling mode: {pooling_mode}")
-
-        if chunk_cfg is None:
-            raise ValueError("chunk_cfg is required for chunk mode")
 
         mat = np.asarray(vec, dtype=float)
         if mat.ndim == 1:
@@ -351,14 +399,13 @@ def build_feature_matrix_from_df(
 
 def build_feature_matrix_and_labels_from_df(
     df,
+    *,
     label_cols: str | list[str],
-    feature_cfg: FeatureConfig,
-    pooling_mode: Literal["global", "chunk"],
-    pooling_cfg: PoolingConfig,
-    chunk_cfg: ChunkConfig | None = None,
+    pipeline_cfg: PipelineConfig,
     indices: list[int] | None = None,
-    pathroot: str = "train_audio_dir",
+    pathroot: Path,
     filename_col: str = "filename",
+    features_pathroot: Path | None = None,
 ) -> tuple[np.ndarray, np.ndarray | dict[str, np.ndarray], list[str]]:
     """Build feature matrix and aligned labels.
 
@@ -396,24 +443,20 @@ def build_feature_matrix_and_labels_from_df(
         vec, names = extract_features_from_row(
             df=df,
             idx=idx,
-            feature_cfg=feature_cfg,
-            pooling_mode=pooling_mode,
-            pooling_cfg=pooling_cfg,
-            chunk_cfg=chunk_cfg,
+            pipeline_cfg=pipeline_cfg,
             pathroot=pathroot,
             filename_col=filename_col,
+            features_pathroot=features_pathroot,
         )
 
-        if pooling_mode == "global":
+        if pipeline_cfg.pooling.pooling_mode == "global":
             row_matrix = np.asarray(vec, dtype=float).ravel()[np.newaxis, :]
-        elif pooling_mode == "chunk":
+        if pipeline_cfg.pooling.pooling_mode == "chunk":
             row_matrix = np.asarray(vec, dtype=float)
             if row_matrix.ndim == 1:
                 row_matrix = row_matrix[np.newaxis, :]
             if row_matrix.ndim != 2:
                 raise RuntimeError("Chunk features must be a 2D matrix")
-        else:
-            raise ValueError(f"Unsupported pooling mode: {pooling_mode}")
 
         if row_matrix.shape[1] != len(names):
             raise RuntimeError(

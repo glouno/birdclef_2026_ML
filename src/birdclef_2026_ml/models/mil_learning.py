@@ -1,12 +1,15 @@
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable
+from pathlib import Path
 
 import numpy as np
 from sklearn.metrics import log_loss
 
 from birdclef_2026_ml.feature_engineering import build_mil_feature_matrix, split_audio_into_chunks
-from birdclef_2026_ml.feature_engineering.configs import ChunkConfig, FeatureConfig, MILConfig, PoolingConfig
-from birdclef_2026_ml.processing.audio_utils import build_audio_path, load_audio
+from birdclef_2026_ml.configs import PipelineConfig, MILConfig
+from birdclef_2026_ml.processing.audio_utils import build_audio_path, get_path, load_audio
+from birdclef_2026_ml.feature_engineering.chunking import get_sliding_window_intervals
+from birdclef_2026_ml.feature_engineering.utils import joblib_to_frame_features
 
 
 Array1D = np.ndarray
@@ -159,21 +162,14 @@ def mil_multiclass_log_loss(
 
 def build_mil_feature_bags(
     chunks: Iterable[np.ndarray] | np.ndarray,
-    feature_cfg: FeatureConfig,
-    pooling_cfg: PoolingConfig,
-    mil_cfg: MILConfig,
-    chunk_cfg: ChunkConfig | None = None,
+    pipeline_cfg: PipelineConfig,
     bag_ids: Any | None = None,
 ) -> MILFeatureBags:
     """Build one MIL bag per precomputed chunk or from a full audio waveform."""
 
     chunk_iterable: Iterable[np.ndarray]
     if isinstance(chunks, np.ndarray) and chunks.ndim == 1:
-        chunk_iterable = split_audio_into_chunks(
-            y=chunks,
-            feature_cfg=feature_cfg,
-            chunk_cfg=chunk_cfg or ChunkConfig(),
-        )
+        chunk_iterable = split_audio_into_chunks(y=chunks, pipeline_cfg=pipeline_cfg)
     else:
         chunk_iterable = chunks
 
@@ -183,9 +179,7 @@ def build_mil_feature_bags(
     for i, chunk in enumerate(chunk_iterable):
         bag, feature_names = build_mil_feature_matrix(
             y=np.asarray(chunk, dtype=float),
-            feature_cfg=feature_cfg,
-            pooling_cfg=pooling_cfg,
-            mil_cfg=mil_cfg,
+            pipeline_cfg=pipeline_cfg,
         )
         if feature_names_ref is None:
             feature_names_ref = list(feature_names)
@@ -202,53 +196,92 @@ def build_mil_feature_bags(
 
 def build_mil_bags_from_df(
     df,
-    feature_cfg: FeatureConfig,
-    pooling_cfg: PoolingConfig,
-    mil_cfg: MILConfig,
-    # label_cols: str | list[str] | None = None,
-    chunk_cfg: ChunkConfig | None = None,
+    *,
+    pipeline_cfg: PipelineConfig,
     indices: list[int] | None = None,
-    pathroot: str = "train_audio_dir",
+    pathroot: Path,
     filename_col: str = "filename",
+    features_pathroot: Path | None = None,
 ) -> MILFeatureBags | tuple[list[Array2D], Array1D | dict[str, Array1D], list[str]]:
     """Load audio rows, split them into chunks, then build one MIL bag per chunk."""
-    chunk_cfg = chunk_cfg or ChunkConfig()
     if indices is None:
         indices = list(range(len(df)))
 
-    # if label_cols is None:
-    #     label_names: list[str] = []
-    #     return_single = False
-    # elif isinstance(label_cols, str):
-    #     label_names = [label_cols]
-    #     return_single = True
-    # else:
-    #     label_names = list(label_cols)
-    #     return_single = False
+    if features_pathroot is None:
+        chunk_audio: list[np.ndarray] = []
+        bag_ids: list[tuple[int, int]] = []
+        expanded_indices: list[Any] = []
+        for idx in indices:
+            path = build_audio_path(
+                df=df,
+                idx=idx,
+                pathroot=pathroot,
+                filename_col=filename_col,
+            )
+            y = load_audio(path, sr=pipeline_cfg.feature.sr)
+            chunks = split_audio_into_chunks(y=y, pipeline_cfg=pipeline_cfg)
+            chunk_audio.extend(chunks)
+            bag_ids.extend((idx, chunk_idx) for chunk_idx in range(len(chunks)))
+            expanded_indices.extend([df.index[idx]] * len(chunks))
 
-    chunk_audio: list[np.ndarray] = []
-    bag_ids: list[tuple[int, int]] = []
-    expanded_indices: list[Any] = []
-    for idx in indices:
-        path = build_audio_path(
-            df=df,
-            idx=idx,
-            pathroot=pathroot,
-            filename_col=filename_col,
+        bags = build_mil_feature_bags(
+            chunks=chunk_audio,
+            pipeline_cfg=pipeline_cfg,
+            bag_ids=np.asarray(bag_ids, dtype=object),
         )
-        y = load_audio(path, sr=feature_cfg.sr)
-        chunks = split_audio_into_chunks(y=y, feature_cfg=feature_cfg, chunk_cfg=chunk_cfg)
-        chunk_audio.extend(chunks)
-        bag_ids.extend((idx, chunk_idx) for chunk_idx in range(len(chunks)))
-        expanded_indices.extend([df.index[idx]] * len(chunks))
+        return bags.bags, np.asarray(expanded_indices), bags.feature_names
 
-    bags = build_mil_feature_bags(
-        chunks=chunk_audio,
-        feature_cfg=feature_cfg,
-        pooling_cfg=pooling_cfg,
-        mil_cfg=mil_cfg,
-        chunk_cfg=chunk_cfg,
-        bag_ids=np.asarray(bag_ids, dtype=object),
-    )
-    # Always return expanded indices for downstream expansion
-    return bags.bags, np.asarray(expanded_indices), bags.feature_names
+    # Precomputed features mode: load one joblib per audio and split frame features into chunks.
+    all_bags: list[Array2D] = []
+    expanded_indices: list[Any] = []
+    feature_names_ref: list[str] | None = None
+
+    frame_rate_hz = float(pipeline_cfg.feature.sr) / float(pipeline_cfg.feature.hop_length)
+    for idx in indices:
+        filename = Path(df[filename_col].iloc[idx]).with_suffix(".joblib")
+        feature_path = features_pathroot / filename
+        frame_features = joblib_to_frame_features(feature_path)
+
+        # Use only base (non-waveform, non-delta) features for frame-based chunking.
+        frame_feature_items = [
+            (k, arr)
+            for k, v in frame_features.items()
+            if k != "waveform" and not (k.endswith("_delta") or k.endswith("_delta2"))
+            for arr in (np.asarray(v),)
+        ]
+        if not frame_feature_items:
+            continue
+
+        n_frames = min(
+            v.shape[-1]
+            for _, v in frame_feature_items
+            if v.ndim >= 1
+        )
+        chunk_intervals = get_sliding_window_intervals(
+            n_frames=n_frames,
+            window_size_s=pipeline_cfg.chunk.chunk_size_s,
+            step_size_s=pipeline_cfg.chunk.step_size_s,
+            frame_rate_hz=frame_rate_hz,
+        )
+
+        for chunk_idx, (start, end) in enumerate(chunk_intervals):
+            if end <= start:
+                continue
+            chunk_features = {
+                key: value[..., start:end]
+                for key, value in frame_feature_items
+            }
+            bag, feature_names = build_mil_feature_matrix(
+                y=None,
+                pipeline_cfg=pipeline_cfg,
+                frame_features=chunk_features,
+            )
+
+            if feature_names_ref is None:
+                feature_names_ref = list(feature_names)
+            elif feature_names != feature_names_ref:
+                raise RuntimeError("Inconsistent MIL feature names across precomputed chunks")
+
+            all_bags.append(np.asarray(bag, dtype=float))
+            expanded_indices.append(df.index[idx])
+    return all_bags, np.asarray(expanded_indices), (feature_names_ref or [])

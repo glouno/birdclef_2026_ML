@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "catboost>=1.2.10",
+    "dotenv>=0.9.9",
     "fastparquet>=2026.3.0",
     "geodatasets>=2026.1.0",
     "geopandas>=1.1.3",

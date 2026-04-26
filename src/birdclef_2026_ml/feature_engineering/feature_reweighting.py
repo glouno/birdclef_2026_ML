@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+from pathlib import Path
 
 from birdclef_2026_ml.paths import PATHS
 
@@ -54,8 +55,8 @@ def rescale_profile_weights(weights: np.ndarray) -> np.ndarray:
 
 def load_weights(
     col: str,
-    train_path=PATHS["proc_train"],
-    profiles_path=PATHS["profiles"] / "all_profiles.npy",
+    train_path: Path = PATHS["proc_train"],
+    profiles_path: Path = PATHS["profiles"] / "all_profiles.npy",
 ) -> dict[str, np.ndarray]:
     train_df = pd.read_parquet(train_path)
     profiles = np.load(profiles_path)
