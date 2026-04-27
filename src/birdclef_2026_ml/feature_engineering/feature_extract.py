@@ -125,8 +125,8 @@ def extract_all_frame_features(
 
     features: dict[str, np.ndarray] = {}
 
-    if cfg.include_waveform_stats:
-        features["waveform"] = y_arr[np.newaxis, :]
+    # if cfg.include_waveform_stats:
+    #     features["waveform"] = y_arr[np.newaxis, :]
 
     features.update(extract_mel_spectrogram_features(y_arr, cfg))
     features.update(extract_mfcc_features(y_arr, cfg))

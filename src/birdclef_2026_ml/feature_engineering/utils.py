@@ -14,8 +14,8 @@ def _pad_short_audio_randomly(y: np.ndarray, min_samples: int) -> np.ndarray:
         return y
 
     pad_total = int(min_samples - y.size)
-    where = np.random.choice(("begin", "end", "both"))
-
+    # where = np.random.choice(("begin", "end", "both"))
+    where = "both"
     if where == "begin":
         pad_left, pad_right = pad_total, 0
     elif where == "end":

@@ -11,13 +11,29 @@ from birdclef_2026_ml.feature_engineering import save_features_from_audio_dir
 from birdclef_2026_ml.processing.preprocess import preprocess_datasets_for_models
 from birdclef_2026_ml.processing.feature_dataset_builder import build_memmap_from_chunks
 from birdclef_2026_ml.paths import PATHS, DATA_ROOT, MODELS_ROOT
-from birdclef_2026_ml.processing.data_split import split_audio_train_val, split_soundscapes_train_val
+from birdclef_2026_ml.training.model_training import train_and_save_ovr_models_chunks
 
 
 def _build_parser() -> argparse.ArgumentParser:
     # Optionally add more arguments for configs if needed
     parser = argparse.ArgumentParser(prog="birdclef", description="BirdCLEF data utilities")
     subparsers = parser.add_subparsers(dest="command")
+
+    parser_fit_ovr_models_chunks = subparsers.add_parser(
+        "train-ovr-models-chunks",
+        help="Train OVR models per chunks"
+    )
+    parser_fit_ovr_models_chunks.add_argument(
+        "--run-name",
+        type=str,
+        required=True,
+        help=f"Directory in {MODELS_ROOT} where data is located and trained models will be saved"
+    )
+    parser_fit_ovr_models_chunks.add_argument(
+        "--split-train-val",
+        action="store_true",
+        help="If passed, then dataset is split into train/validation sets"
+    )
 
     parser_build_feature_matrices = subparsers.add_parser(
         "build-feature-matrices",
@@ -250,35 +266,21 @@ def _run_build_feature_matrices(args):
     pathroot = PATHS[args.input_audio_dir]
     features_pathroot = PATHS[args.input_features_dir]
 
-    if args.soundscapes:
-        df_train, df_val = split_soundscapes_train_val(df)
-        subsets = {
-            "train_soundscapes": df_train,
-            "val_soundscapes": df_val,
-        }
-    else:
-        df_train, df_val = split_audio_train_val(df)
-        subsets = {
-            "train": df_train,
-            "val": df_val,
-        }
+    out_path = MODELS_ROOT / args.output_folder
 
-    for name, df_subset in subsets.items():
-        print(f"Started processing {name} subset")
+    build_memmap_from_chunks(
+        df,
+        pipeline_cfg=pipeline_cfg,
+        pathroot=pathroot,
+        filename_col="filename",
+        features_pathroot=features_pathroot,
+        out_instances_path=out_path,
+        soundscapes=args.soundscapes,
+    )
 
-        out_path = MODELS_ROOT / args.output_folder / name
 
-        build_memmap_from_chunks(
-            df_subset,
-            pipeline_cfg=pipeline_cfg,
-            pathroot=pathroot,
-            filename_col="filename",
-            features_pathroot=features_pathroot,
-            out_instances_path=out_path,
-            soundscapes=args.soundscapes,
-        )
-
-        print(f"Finished processing {name} subset")
+def _run_train_ovr_models_chunks(args):
+    train_and_save_ovr_models_chunks(args.run_name, args.split_train_val)
 
 
 def main(argv=None) -> int:
@@ -304,6 +306,9 @@ def main(argv=None) -> int:
         return 0
     elif args.command == "extract-all-features":
         _run_extract_all_features(args)
+        return 0
+    elif args.command == "train-ovr-models-chunks":
+        _run_train_ovr_models_chunks(args)
         return 0
     else:
         parser.error(f"Unknown command: {args.command}")

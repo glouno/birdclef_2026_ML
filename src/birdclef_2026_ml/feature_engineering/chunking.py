@@ -2,9 +2,10 @@
 import numpy as np
 
 
-def feature_frame_rate_hz(feature_name: str, sr, hop_length) -> float:
-    if feature_name == "waveform":
-        return float(sr)
+def feature_frame_rate_hz(sr, hop_length) -> float:
+    # if feature_name == "waveform":
+    #     return float(sr)
+    # Frame_rate_hz for any feature except waveform
     return float(sr) / float(hop_length)
 
 
@@ -33,24 +34,48 @@ def get_sliding_window_intervals(
     step = _window_step_in_frames(step_size_s, frame_rate_hz)
     if n_frames <= 0 or window_size > n_frames:
         return [(0, n_frames)] if n_frames > 0 else []
-
     windows: list[tuple[int, int]] = []
     start = 0
     while start + window_size < n_frames:
         end = start + window_size
         windows.append((start, end))
         start += step
+
     if not windows or windows[-1][1] < n_frames:
         end = n_frames
         start = max(0, end - window_size)
         windows.append((start, end))
+    # print(windows)
     return windows
 
 
-def count_nb_chunks(df, chunk_cfg):
+# TODO: overestimates by 1 number of chunks for some audios
+def count_nb_chunks(df, chunk_cfg, sr, hop_length):
     C = chunk_cfg.chunk_size_s
     S = chunk_cfg.step_size_s
-    total_chunks = (
-        np.ceil((np.maximum(C, df["duration"]) - C) / S).astype(int) + 1
-    ).sum()
-    return total_chunks
+
+    frame_rate_hz = feature_frame_rate_hz(sr, hop_length)
+    # N = np.ceil(df["duration"] * frame_rate_hz).astype(int)
+    # W = int(np.ceil(C * frame_rate_hz))
+    # H = int(np.ceil(S * frame_rate_hz))
+
+    # base = np.floor((N - W) / H).astype(int) + 1
+    # base = np.maximum(1, base)  # handles short audio
+
+    # last_end = (base - 1) * H + W
+    # needs_extra = last_end < N
+
+    # chunks = base + needs_extra.astype(int)
+    # return np.sum(chunks)
+    total = 0
+    for dur in df["duration"].values:
+        # n_frames = int(np.ceil(dur * frame_rate_hz))
+        n_frames = 1 + np.floor(dur * sr / hop_length)
+        intervals = get_sliding_window_intervals(
+            n_frames,
+            chunk_cfg.chunk_size_s,
+            chunk_cfg.step_size_s,
+            frame_rate_hz,
+        )
+        total += len(intervals)
+    return total

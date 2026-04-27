@@ -29,7 +29,7 @@ class FeatureConfig:
     n_mfcc: int = 20
     roll_percent: float = 0.85
     n_mels: int = 128  # balance between resolution & smoothing
-    include_waveform_stats: bool = False
+    # include_waveform_stats: bool = False
     include_mel_spectrogram: bool = True
     include_mfcc: bool = False
     include_delta: bool = True

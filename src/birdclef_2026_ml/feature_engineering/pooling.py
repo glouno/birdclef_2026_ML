@@ -116,7 +116,7 @@ def pool_feature_dict(
 
     if pipeline_cfg.pooling.pooling_mode == "chunk":
         for name, mat in features_dict.items():
-            frame_rate_hz = feature_frame_rate_hz(name, pipeline_cfg.feature.sr, pipeline_cfg.feature.hop_length)
+            frame_rate_hz = feature_frame_rate_hz(pipeline_cfg.feature.sr, pipeline_cfg.feature.hop_length)
             pooled[name] = sliding_window_pool(
                 feature_matrix=mat,
                 pooling_cfg=pipeline_cfg.pooling,
@@ -137,7 +137,7 @@ def pool_feature_dict_sliding_windows(
     pooled: dict[str, np.ndarray] = {}
 
     for name, mat in features_dict.items():
-        frame_rate_hz = feature_frame_rate_hz(name, pipeline_cfg.feature.sr, pipeline_cfg.feature.hop_length)
+        frame_rate_hz = feature_frame_rate_hz(pipeline_cfg.feature.sr, pipeline_cfg.feature.hop_length)
         pooled[name] = sliding_window_pool(
             feature_matrix=mat,
             pooling_cfg=pipeline_cfg.pooling,

@@ -34,7 +34,6 @@ def apply_profile_weights(x: np.ndarray, weights: np.ndarray, alpha: float) -> n
     # alpha >1 tends to overfit
 
     # sum since we work with dB
-    print("apply_profile_weights", weights)
     return x + alpha * weights
 
 
@@ -81,7 +80,6 @@ def infer_mel_band_indices(
         band_token = name[len(prefix):].split("_", 1)[0]
         if band_token.isdigit():
             mel_band_indices[feature_idx] = int(band_token) - 1
-        break
     return mel_band_indices
 
 

@@ -66,12 +66,6 @@ def _validate_same_length(*arrays: Any) -> None:
         raise ValueError(f"Inputs must have same number of rows, got lengths={lengths}")
 
 
-def _fit_encoder(values: Any) -> LabelEncoder:
-    """Fit a label encoder on a 1D label vector."""
-    encoder = LabelEncoder()
-    encoder.fit(_to_1d(values))
-    return encoder
-
 
 def _predict_proba_aligned(model: Any, x: Any, all_class_ids: Array1D) -> Array2D:
     """Align predict_proba output to a global class-id ordering.

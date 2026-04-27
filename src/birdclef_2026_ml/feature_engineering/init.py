@@ -107,8 +107,8 @@ def build_feature_vector(
         if y_arr.size == 0:
             raise ValueError("y must contain at least one sample")
         # Pad audio for chunk mode before frame-level extraction.
-        if pipeline_cfg.pooling.pooling_mode == "chunk":
-            y_arr = pad_short_audio(y_arr, pipeline_cfg.chunk.chunk_size_s, pipeline_cfg.feature.sr)
+        # if pipeline_cfg.pooling.pooling_mode == "chunk":
+        #     y_arr = pad_short_audio(y_arr, pipeline_cfg.chunk.chunk_size_s, pipeline_cfg.feature.sr)
         frame_features_resolved = extract_all_frame_features(y_arr, pipeline_cfg.feature)
 
     pooled = pool_feature_dict(
@@ -136,31 +136,20 @@ def build_feature_vector(
         return feature_vector, feature_names
 
     chunk_mats: list[np.ndarray] = []
-    n_chunks = 0
+    # n_chunks = None
     for pooled_mat in pooled.values():
         mat = np.asarray(pooled_mat, dtype=float)
-        if mat.ndim == 1:
-            mat = mat[np.newaxis, :]
-        if mat.ndim != 2:
-            raise RuntimeError("Chunk pooled feature must be 2D")
+        # if mat.ndim == 1:
+        #     mat = mat[np.newaxis, :]
+        # if mat.ndim != 2:
+        #     raise RuntimeError("Chunk pooled feature must be 2D")
         chunk_mats.append(mat)
-        n_chunks = max(n_chunks, mat.shape[0])
 
     if not chunk_mats:
         return np.empty((0, 0), dtype=float), feature_names
 
-    fill_value = float(pipeline_cfg.pooling.nan_fill_value)
-    rows: list[np.ndarray] = []
-    for chunk_idx in range(n_chunks):
-        row_parts: list[np.ndarray] = []
-        for mat in chunk_mats:
-            if chunk_idx < mat.shape[0]:
-                row_parts.append(mat[chunk_idx])
-            else:
-                row_parts.append(np.full(mat.shape[1], fill_value, dtype=float))
-        rows.append(np.concatenate(row_parts) if row_parts else np.array([], dtype=float))
-
-    feature_matrix = np.vstack(rows) if rows else np.empty((0, len(feature_names)), dtype=float)
+    # Concatenate all features for each chunk
+    feature_matrix = np.hstack(chunk_mats) if chunk_mats else np.empty((0, len(feature_names)), dtype=float)
     if feature_matrix.shape[1] != len(feature_names):
         raise RuntimeError(
             "Chunk feature matrix width and feature name count mismatch "
