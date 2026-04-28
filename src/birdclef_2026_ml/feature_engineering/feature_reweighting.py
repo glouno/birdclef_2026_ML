@@ -34,7 +34,17 @@ def apply_profile_weights(x: np.ndarray, weights: np.ndarray, alpha: float) -> n
     # alpha >1 tends to overfit
 
     # sum since we work with dB
-    return x + alpha * weights
+    # return x + alpha * weights
+    mask = (weights[0] != 1)
+    # print("weights", new_weights.max(), new_weights.min())
+    # print("new_x", new_x.min(), new_x.max())
+    x_lin = np.exp(x[:, mask] * np.log(10) / 10)
+    w_lin = np.exp(weights[:, mask] * np.log(10) / 10)
+
+    x_lin = x_lin * (1 + alpha * w_lin)
+    x_db = 10 * np.log10(x_lin)
+    x[:, mask] = x_db
+    # return x_db
 
 
 def normalize_profile_weights_mean_std(weights: np.ndarray) -> np.ndarray:
@@ -60,8 +70,10 @@ def load_weights(
     train_df = pd.read_parquet(train_path)
     profiles = np.load(profiles_path)
     weights_df = compute_weights(train_df, profiles)
+
     return {
-        str(getattr(row, col)): rescale_profile_weights(row.profile_norm)
+        # str(getattr(row, col)): rescale_profile_weights(row.profile_norm)
+        str(getattr(row, col)): row.profile_norm
         for row in weights_df.itertuples(index=False)
     }
 

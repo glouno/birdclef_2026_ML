@@ -5,6 +5,7 @@ import numpy as np
 from sklearn.base import clone
 from sklearn.preprocessing import StandardScaler
 from sklearn.preprocessing import LabelEncoder
+from sklearn.utils import resample
 
 from birdclef_2026_ml.configs import MILConfig
 from birdclef_2026_ml.feature_engineering.feature_reweighting import (
@@ -53,11 +54,29 @@ class PerClassOneVsRestClassifier:
 
     estimators_: list[Any]
     classes_: Array1D
-    scalers_: Any = None  # StandardScaler or dict[scope_value, StandardScaler]
-    weights_: Any = None  # dict[scope_value, Array2D]
+    scalers_: StandardScaler | dict[Any, StandardScaler]
+    class_weights_: Any = None  # dict[scope_value, Array2D]
     estimator_scope_values_: list[Any] | None = None
     feature_scales_: Array2D | None = None
     feature_alpha_: float = 0.5
+
+    def _transform(self, x: np.ndarray, scope_value: Any | None = None) -> np.ndarray:
+        x = np.asarray(x, dtype=float)
+
+        if self.feature_scales_ is not None:
+            feature_scale = self.feature_scales_[0] if scope_value is None else None
+            if feature_scale is not None:
+                apply_profile_weights(x, feature_scale[None, :], self.feature_alpha_)
+
+        if self.scalers_ is None:
+            return x
+
+        if isinstance(self.scalers_, dict):
+            scaler = self.scalers_[scope_value]
+        else:
+            scaler = self.scalers_
+
+        return scaler.transform(x)
 
     def predict_proba(self, x: Any) -> Array2D:
         x_arr = np.asarray(x, dtype=float)
@@ -82,17 +101,14 @@ class PerClassOneVsRestClassifier:
             if feature_scale is None:
                 x_scaled = x_arr
             else:
-                x_scaled = apply_profile_weights(
+                apply_profile_weights(
                     x_arr,
                     feature_scale[None, :],
                     self.feature_alpha_,
                 )
+                x_scaled = x_arr
             if self.scalers_ is not None:
-                if isinstance(self.scalers_, dict):
-                    scaler = self.scalers_[scope_value]
-                else:
-                    scaler = self.scalers_
-                x_scaled = scaler.transform(x_scaled)
+                x_scaled = self._transform(x_scaled, scope_value)
             if hasattr(estimator, "predict_proba"):
                 proba = np.asarray(estimator.predict_proba(x_scaled), dtype=float)
                 positive_col = int(np.flatnonzero(np.asarray(estimator.classes_) == 1)[0])
@@ -107,6 +123,10 @@ class PerClassOneVsRestClassifier:
             raise ValueError(
                 "Each one-vs-rest estimator must expose predict_proba or decision_function"
             )
+
+        # for i, est in enumerate(self.estimators_):
+        #     scores = est.decision_function(x_scaled)
+        #     print("scores", i, np.min(scores), np.max(scores), np.mean(scores))
 
         proba = np.column_stack(positive_probs)
         denom = proba.sum(axis=1, keepdims=True)
@@ -129,86 +149,6 @@ def _build_label_scope_by_class_id(
             )
         label_scope_by_class_id[class_id] = scope_values[0]
     return label_scope_by_class_id
-
-
-def _fit_per_class_ovr(
-    x: Array2D,
-    y_enc: Array1D,
-    *,
-    estimator: Any,
-    feature_scales: Array2D | None = None,
-    alpha: float = 0.5,
-    y_scope: Array1D | None = None,
-    label_encoder: LabelEncoder,
-) -> PerClassOneVsRestClassifier:
-    estimators: list[Any] = []
-    n_classes = len(label_encoder.classes_) if label_encoder is not None else int(np.max(y_enc)) + 1
-    classes = np.arange(n_classes, dtype=int)
-
-    label_scope_by_class_id: dict[int, Any] | None = None
-    if y_scope is not None:
-        label_scope_by_class_id = _build_label_scope_by_class_id(
-            y_enc=y_enc,
-            y_scope=y_scope,
-            label_encoder=label_encoder,
-        )
-    if y_scope is None:
-        scalers: StandardScaler | dict[Any, StandardScaler] = StandardScaler()
-        scalers.fit(x)
-    else:
-        scope_values = np.unique(y_scope)
-        scalers = {}
-        for scope_value in scope_values:
-            scaler = StandardScaler()
-            scaler.fit(x[y_scope == scope_value])
-            scalers[scope_value] = scaler
-
-    estimator_scope_values: list[Any] = []
-    for class_id in classes:
-        if y_scope is None:
-            train_mask = np.ones(len(y_enc), dtype=bool)
-            scope_value = None
-        else:
-            scope_value = label_scope_by_class_id[class_id]
-            train_mask = y_scope == scope_value
-
-        y_binary = (y_enc[train_mask] == class_id).astype(int)
-        if np.unique(y_binary).size < 2:
-            raise ValueError(
-                "Each one-vs-rest binary problem must include both positive and negative samples "
-                f"after scope filtering; class_id={class_id}"
-            )
-
-        x_train = x[train_mask]
-        estimator_binary = clone(estimator)
-        if feature_scales is not None:
-            feature_scale = feature_scales[class_id]
-            print("weights", feature_scale[None, :])
-            x_train = apply_profile_weights(x_train, feature_scale[None, :], alpha)
-        if isinstance(scalers, dict):
-            x_train = scalers[scope_value].transform(x_train)
-        else:
-            x_train = scalers.transform(x_train)
-        estimator_binary.fit(x_train, y_binary)
-        estimators.append(estimator_binary)
-        estimator_scope_values.append(scope_value)
-
-    return PerClassOneVsRestClassifier(
-        estimators_=estimators,
-        classes_=classes,
-        scalers_=scalers,
-        estimator_scope_values_=estimator_scope_values,
-        feature_scales_=feature_scales,
-        feature_alpha_=alpha,
-    )
-
-
-def _resolve_partial_fit_batch_size(n_samples: int, batch_size: int | None) -> int:
-    if batch_size is None:
-        return max(1, min(n_samples, 8192))
-    if batch_size <= 0:
-        raise ValueError(f"batch_size must be positive, got {batch_size}")
-    return int(batch_size)
 
 
 def _validate_binary_targets_for_ovr(
@@ -236,6 +176,12 @@ def _validate_binary_targets_for_ovr(
             )
 
 
+def scaler_transform(x, scalers, scope_value):
+    if isinstance(scalers, dict):
+        return scalers[scope_value].transform(x)
+    return scalers.transform(x)
+
+
 def _fit_per_class_ovr_incremental(
     x: Array2D,
     y_enc: Array1D,
@@ -245,22 +191,14 @@ def _fit_per_class_ovr_incremental(
     alpha: float = 0.5,
     y_scope: Array1D | None = None,
     label_encoder: LabelEncoder,
-    batch_size: int | None = None,
+    batch_size: int,
     epochs: int = 1,
 ) -> PerClassOneVsRestClassifier:
-    if not hasattr(estimator, "partial_fit"):
-        raise ValueError("Incremental one-vs-rest training requires an estimator exposing partial_fit")
-    if epochs <= 0:
-        raise ValueError(f"epochs must be positive, got {epochs}")
-
     n_classes = len(label_encoder.classes_)
     classes = np.arange(n_classes, dtype=int)
-    effective_batch_size = _resolve_partial_fit_batch_size(len(y_enc), batch_size)
 
     label_scope_by_class_id: dict[int, Any] | None = None
     if y_scope is not None:
-        if label_encoder is None:
-            raise ValueError("label_encoder is required when y_scope is provided")
         label_scope_by_class_id = _build_label_scope_by_class_id(
             y_enc=y_enc,
             y_scope=y_scope,
@@ -278,8 +216,8 @@ def _fit_per_class_ovr_incremental(
     binary_classes = np.array([0, 1], dtype=int)
     if y_scope is None:
         scalers: StandardScaler | dict[Any, StandardScaler] = StandardScaler()
-        for start in range(0, len(y_enc), effective_batch_size):
-            stop = min(start + effective_batch_size, len(y_enc))
+        for start in range(0, len(y_enc), batch_size):
+            stop = min(start + batch_size, len(y_enc))
             x_batch = np.asarray(x[start:stop], dtype=float)
             if x_batch.shape[0] == 0:
                 continue
@@ -289,8 +227,8 @@ def _fit_per_class_ovr_incremental(
         for scope_value in np.unique(y_scope):
             scaler = StandardScaler()
             scope_idx = np.flatnonzero(y_scope == scope_value)
-            for start in range(0, len(scope_idx), effective_batch_size):
-                stop = min(start + effective_batch_size, len(scope_idx))
+            for start in range(0, len(scope_idx), batch_size):
+                stop = min(start + batch_size, len(scope_idx))
                 batch_idx = scope_idx[start:stop]
                 x_batch = np.asarray(x[batch_idx], dtype=float)
                 if x_batch.shape[0] == 0:
@@ -305,40 +243,34 @@ def _fit_per_class_ovr_incremental(
         scope_value = None
         if label_scope_by_class_id is not None:
             scope_value = label_scope_by_class_id[int(class_id)]
+            mask_scope = (y_enc == scope_value)
+            idx = np.where(mask_scope)[0]
+        else:
+            idx = np.arange(len(y_enc))
+
+        idx = resample(idx, replace=True, random_state=42)
 
         first_batch = True
         for _ in range(epochs):
-            for start in range(0, len(y_enc), effective_batch_size):
-                stop = min(start + effective_batch_size, len(y_enc))
+            for start in range(0, len(idx), batch_size):
+                stop = min(start + batch_size, len(y_enc))
                 batch_slice = slice(start, stop)
+                idx_slice = idx[batch_slice]
 
-                y_batch_enc = y_enc[batch_slice]
-                if y_scope is None:
-                    batch_mask = None
-                else:
-                    batch_mask = y_scope[batch_slice] == scope_value
-                    if not np.any(batch_mask):
-                        continue
-                    y_batch_enc = y_batch_enc[batch_mask]
-
-                x_batch = np.asarray(x[batch_slice], dtype=float)
-                if batch_mask is not None:
-                    x_batch = x_batch[batch_mask]
-                if x_batch.shape[0] == 0:
-                    continue
+                y_batch_enc = y_enc[idx_slice]
+                x_batch = np.asarray(x[idx_slice], dtype=float)
 
                 y_binary = (y_batch_enc == class_id).astype(int)
                 if feature_scale is not None:
-                    x_batch = apply_profile_weights(x_batch, feature_scale[None, :], alpha)
-                if isinstance(scalers, dict):
-                    x_batch = scalers[scope_value].transform(x_batch)
-                else:
-                    x_batch = scalers.transform(x_batch)
+                    apply_profile_weights(x_batch, feature_scale[None, :], 0.5)
+
+                x_batch = scaler_transform(x_batch, scalers, scope_value)
 
                 if first_batch:
                     estimator_binary.partial_fit(x_batch, y_binary, classes=binary_classes)
                     first_batch = False
                 else:
+                    print("Calling partial fit", y_batch_enc)
                     estimator_binary.partial_fit(x_batch, y_binary)
 
         if first_batch:
@@ -427,7 +359,6 @@ def train_one_vs_rest_model(
     if feature_reweighting:
         if profile_weights_by_label is None:
             profile_weights_by_label = load_weights(profile_target)
-
         feature_scales = np.vstack([
             build_feature_scale_vector(
                 band_weights=profile_weights_by_label.get(
@@ -439,28 +370,17 @@ def train_one_vs_rest_model(
             for label in label_encoder.classes_
         ])
 
-    if hasattr(estimator, "partial_fit"):
-        model = _fit_per_class_ovr_incremental(
-            x=x_fit_arr,
-            y_enc=y_fit,
-            estimator=estimator,
-            feature_scales=feature_scales,
-            alpha=alpha,
-            y_scope=class_scope_fit,
-            label_encoder=label_encoder,
-            batch_size=batch_size,
-            epochs=epochs,
-        )
-    else:
-        model = _fit_per_class_ovr(
-            x=x_fit_arr,
-            y_enc=y_fit,
-            estimator=estimator,
-            feature_scales=feature_scales,
-            alpha=alpha,
-            y_scope=class_scope_fit,
-            label_encoder=label_encoder,
-        )
+    model = _fit_per_class_ovr_incremental(
+        x=x_fit_arr,
+        y_enc=y_fit,
+        estimator=estimator,
+        feature_scales=feature_scales,
+        alpha=alpha,
+        y_scope=class_scope_fit,
+        label_encoder=label_encoder,
+        batch_size=batch_size,
+        epochs=epochs,
+    )
 
     return OneVsRestArtifacts(
         model=model,
