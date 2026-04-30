@@ -19,6 +19,7 @@ data/**
 !data/configs/
 !data/configs/**
 birdclef-2026/
+artifacts/**
 
 # Environment files
 .env
@@ -34,3 +35,6 @@ models/*
 
 # uv
 uv.lock
+
+# agents
+skills/

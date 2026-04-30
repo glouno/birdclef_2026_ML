@@ -1,19 +1,22 @@
 from pathlib import Path
 import gc
 import numpy as np
-import joblib
 
-from birdclef_2026_ml.processing.audio_utils import build_audio_path, get_path, load_audio, save_config
+from birdclef_2026_ml.processing.audio_utils import build_audio_path, load_audio, save_config
 from birdclef_2026_ml.configs import PipelineConfig, ChunkConfig
 from birdclef_2026_ml.feature_engineering.utils import (
     pad_short_audio,
     _percentile_label,
-    joblib_to_frame_features,
+    # joblib_to_frame_features,
 )
-from birdclef_2026_ml.feature_engineering.feature_extract import extract_all_frame_features
+from birdclef_2026_ml.feature_engineering.feature_extract import (
+    compute_profile_similarity_features,
+    compute_mel_spectrogram,
+    extract_all_frame_features,
+    extract_all_frame_features_from_mel,
+)
 from birdclef_2026_ml.feature_engineering.pooling import pool_feature_dict, pool_feature_dict_sliding_windows
 from birdclef_2026_ml.feature_engineering.chunking import get_sliding_window_intervals
-# from birdclef_2026_ml.paths import PATHS
 
 
 def save_features_from_audio_dir(
@@ -23,7 +26,7 @@ def save_features_from_audio_dir(
     config_path: Path,
     output_path: Path,
 ) -> int:
-    """Compute enabled non-aggregated frame features and save them per feature folder."""
+    """Compute mel spectrogram only, save raw non-aggregated arrays as .npy."""
 
     pipeline_cfg.feature = pipeline_cfg.feature
     output_path.mkdir(parents=True, exist_ok=True)
@@ -31,25 +34,117 @@ def save_features_from_audio_dir(
     filenames = df["filename"].unique()
     total = len(filenames)
 
-    save_config(pipeline_cfg.feature, config_path / "features" / "feature_config.json")
+    save_config(pipeline_cfg.feature, config_path)
 
     for i, filename in enumerate(filenames, start=1):
         y = load_audio(input_path / filename, sr=pipeline_cfg.feature.sr)
-        features = extract_all_frame_features(y, pipeline_cfg.feature)
+        mel_spectrogram_db = compute_mel_spectrogram(y, pipeline_cfg.feature)
 
         saved_count = 0
-        out_path = (output_path / filename).with_suffix(".joblib")
+        out_path = (output_path / filename).with_suffix(".npy")
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        joblib.dump(features, out_path)
+        np.save(out_path, mel_spectrogram_db)
         saved_count += 1
 
         print(f"[{i}/{total}] saved {saved_count} feature arrays for {filename}")
 
         del y
-        del features
+        del mel_spectrogram_db
         gc.collect()
 
     return total
+
+
+def save_pooled_features_from_mel_dir(
+    df,
+    input_mel_dir: Path,
+    output_path: Path,
+    pipeline_cfg: PipelineConfig,
+    filename_col: str = "filename",
+) -> int:
+    """
+    Load precomputed mel spectrograms from .npy, derive full feature set, pool, save per file.
+    """
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    filenames = df[filename_col].unique()
+    total = len(filenames)
+
+    for i, filename in enumerate(filenames, start=1):
+        mel_path = (input_mel_dir / filename).with_suffix(".npy")
+        feature_matrix, feature_names = build_feature_vector(
+            y=None,
+            pipeline_cfg=pipeline_cfg,
+            mel_spectrogram_npy_path=mel_path,
+        )
+
+        out_path = (output_path / filename).with_suffix(".npz")
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(
+            out_path,
+            feature_matrix=np.asarray(feature_matrix, dtype=np.float32),
+            feature_names=np.asarray(feature_names, dtype=object),
+        )
+        print(f"[{i}/{total}] saved pooled features for {filename}")
+
+    return total
+
+
+def add_profile_similarity_features(
+    X: np.ndarray,
+    feature_names: list[str],
+    profiles_path: Path,
+    species_ids_path: Path,
+) -> tuple[np.ndarray, list[str]]:
+    """
+    Append cosine-similarity-to-profile features to pooled feature matrix.
+    """
+    species_profiles = np.load(profiles_path)
+    species_ids = np.load(species_ids_path)
+
+    sim_matrix, sim_feature_names = compute_profile_similarity_features(
+        X=np.asarray(X, dtype=float),
+        feature_names=feature_names,
+        species_profiles=species_profiles,
+        species_ids=species_ids,
+    )
+    X_aug = np.hstack([np.asarray(X, dtype=float), sim_matrix])
+    return X_aug, [*feature_names, *sim_feature_names]
+
+
+def _resolve_frame_features(
+    *,
+    y: np.ndarray | None,
+    pipeline_cfg: PipelineConfig,
+    frame_features: dict[str, np.ndarray] | None = None,
+    # frame_features_joblib_path: str | Path | None = None,
+    mel_spectrogram: np.ndarray | None = None,
+    mel_spectrogram_npy_path: str | Path | None = None,
+) -> dict[str, np.ndarray]:
+    provided = sum(
+        value is not None
+        for value in (frame_features, mel_spectrogram, mel_spectrogram_npy_path, y)
+    )
+    if provided != 1:
+        raise ValueError("Provide exactly one feature source among y/frame_features/joblib/mel/mel_path.")
+
+    # if frame_features is not None:
+    #     return joblib_to_frame_features(frame_features)
+
+    # if frame_features_joblib_path is not None:
+    #     return joblib_to_frame_features(frame_features_joblib_path)
+
+    if mel_spectrogram is not None:
+        return extract_all_frame_features_from_mel(mel_spectrogram, pipeline_cfg.feature)
+
+    if mel_spectrogram_npy_path is not None:
+        mel_spectrogram_db = np.load(mel_spectrogram_npy_path)
+        return extract_all_frame_features_from_mel(mel_spectrogram_db, pipeline_cfg.feature)
+
+    y_arr = np.asarray(y, dtype=float).ravel()
+    if y_arr.size == 0:
+        raise ValueError("y must contain at least one sample")
+    return extract_all_frame_features(y_arr, pipeline_cfg.feature)
 
 
 def get_feature_names(
@@ -86,30 +181,23 @@ def build_feature_vector(
     y: np.ndarray | None,
     pipeline_cfg: PipelineConfig,
     frame_features: dict[str, np.ndarray] | None = None,
-    frame_features_joblib_path: Path | None = None,
+    # frame_features_joblib_path: Path | None = None,
+    mel_spectrogram: np.ndarray | None = None,
+    mel_spectrogram_npy_path: Path | None = None,
 ) -> tuple[np.ndarray, list[str]]:
     """Build pooled features and aligned feature names.
 
     - global mode: returns 1D vector
     - chunk mode: returns 2D matrix (n_chunks, n_features)
     """
-    if frame_features is not None and frame_features_joblib_path is not None:
-        raise ValueError("Provide either frame_features or frame_features_joblib_path, not both.")
-
-    if frame_features is not None:
-        frame_features_resolved = joblib_to_frame_features(frame_features)
-    elif frame_features_joblib_path is not None:
-        frame_features_resolved = joblib_to_frame_features(frame_features_joblib_path)
-    else:
-        if y is None:
-            raise ValueError("y is required when precomputed frame features are not provided.")
-        y_arr = np.asarray(y, dtype=float).ravel()
-        if y_arr.size == 0:
-            raise ValueError("y must contain at least one sample")
-        # Pad audio for chunk mode before frame-level extraction.
-        # if pipeline_cfg.pooling.pooling_mode == "chunk":
-        #     y_arr = pad_short_audio(y_arr, pipeline_cfg.chunk.chunk_size_s, pipeline_cfg.feature.sr)
-        frame_features_resolved = extract_all_frame_features(y_arr, pipeline_cfg.feature)
+    frame_features_resolved = _resolve_frame_features(
+        y=y,
+        pipeline_cfg=pipeline_cfg,
+        frame_features=frame_features,
+        # frame_features_joblib_path=frame_features_joblib_path,
+        mel_spectrogram=mel_spectrogram,
+        mel_spectrogram_npy_path=mel_spectrogram_npy_path,
+    )
 
     pooled = pool_feature_dict(
         features_dict=frame_features_resolved,
@@ -189,26 +277,22 @@ def build_mil_feature_matrix(
     # mil_cfg: MILConfig,
     frame_features: dict[str, np.ndarray] | None = None,
     frame_features_joblib_path: str | Path | None = None,
+    mel_spectrogram: np.ndarray | None = None,
+    mel_spectrogram_npy_path: str | Path | None = None,
 ) -> tuple[np.ndarray, list[str]]:
     """Build one MIL bag from one chunk of audio."""
-    if frame_features is not None and frame_features_joblib_path is not None:
-        raise ValueError("Provide either frame_features or frame_features_joblib_path, not both.")
-
     pipeline_cfg.feature = pipeline_cfg.feature
     pipeline_cfg.pooling = pipeline_cfg.pooling
     mil_cfg = pipeline_cfg.mil
 
-    if frame_features is not None:
-        frame_features_resolved = joblib_to_frame_features(frame_features)
-    elif frame_features_joblib_path is not None:
-        frame_features_resolved = joblib_to_frame_features(frame_features_joblib_path)
-    else:
-        if y is None:
-            raise ValueError("y is required when precomputed frame features are not provided.")
-        y_arr = np.asarray(y, dtype=float).ravel()
-        if y_arr.size == 0:
-            raise ValueError("y must contain at least one sample")
-        frame_features_resolved = extract_all_frame_features(y_arr, pipeline_cfg.feature)
+    frame_features_resolved = _resolve_frame_features(
+        y=y,
+        pipeline_cfg=pipeline_cfg,
+        frame_features=frame_features,
+        # frame_features_joblib_path=frame_features_joblib_path,
+        mel_spectrogram=mel_spectrogram,
+        mel_spectrogram_npy_path=mel_spectrogram_npy_path,
+    )
 
     pooled = pool_feature_dict_sliding_windows(
         features_dict=frame_features_resolved,
@@ -269,16 +353,19 @@ def extract_features_from_path(
     """Load one audio file and return pooled features + names."""
 
     y = None
-    features_joblib_path = None
+    mel_npy_path = None
     if features_pathroot is not None:
-        features_joblib_path = features_pathroot / Path(audio_path).with_suffix(".joblib")
+        mel_candidate = features_pathroot / Path(audio_path).with_suffix(".npy")
+        if mel_candidate.exists():
+            mel_npy_path = mel_candidate
     else:
         y = load_audio(pathroot / audio_path, sr=pipeline_cfg.feature.sr)
 
     return build_feature_vector(
         y=y,
         pipeline_cfg=pipeline_cfg,
-        frame_features_joblib_path=features_joblib_path,
+        # frame_features_joblib_path=features_joblib_path,
+        mel_spectrogram_npy_path=mel_npy_path,
     )
 
 
@@ -293,9 +380,12 @@ def extract_features_from_row(
 ) -> tuple[np.ndarray, list[str]]:
     """Load one audio file and return pooled features + names."""
     y = None
-    features_joblib_path = None
+    mel_npy_path = None
     if features_pathroot is not None:
-        features_joblib_path = features_pathroot / df[filename_col].iloc[idx].with_suffix(".joblib")
+        filename = df[filename_col].iloc[idx]
+        mel_candidate = features_pathroot / Path(filename).with_suffix(".npy")
+        if mel_candidate.exists():
+            mel_npy_path = mel_candidate
     else:
         path = build_audio_path(
             df=df,
@@ -307,7 +397,8 @@ def extract_features_from_row(
     return build_feature_vector(
         y=y,
         pipeline_cfg=pipeline_cfg,
-        frame_features_joblib_path=features_joblib_path,
+        # frame_features_joblib_path=features_joblib_path,
+        mel_spectrogram_npy_path=mel_npy_path,
     )
 
 

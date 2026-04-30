@@ -561,3 +561,58 @@ def plot_orig_vs_clean_audios(y_orig, y_clean, sr, n_mels, n_fft, hop_length):
         axes[3].set_yticks([])
 
     plt.tight_layout()
+
+
+def plot_spectral_diagnostics(path, feature_cfg, axes=None, title="Mel Spectrogram + Centroid/Rolloff"):
+    y, sr = librosa.load(path, sr=feature_cfg.sr)
+
+    # --- Spectrogram ---
+    S = librosa.feature.melspectrogram(y=y, sr=feature_cfg.sr, n_fft=feature_cfg.n_fft,
+                                       hop_length=feature_cfg.hop_length, n_mels=feature_cfg.n_mels)
+    S_db = librosa.power_to_db(S, ref=1.0)
+
+    # --- Spectral features ---
+    centroid = librosa.feature.spectral_centroid(
+        y=y, sr=feature_cfg.sr, n_fft=feature_cfg.n_fft, hop_length=feature_cfg.hop_length)[0]
+    bandwidth = librosa.feature.spectral_bandwidth(
+        y=y, sr=feature_cfg.sr, n_fft=feature_cfg.n_fft, hop_length=feature_cfg.hop_length)[0]
+    rolloff = librosa.feature.spectral_rolloff(
+        y=y, sr=feature_cfg.sr, n_fft=feature_cfg.n_fft, hop_length=feature_cfg.hop_length, roll_percent=feature_cfg.roll_percent)[0]
+    flatness = librosa.feature.spectral_flatness(y=y, n_fft=feature_cfg.n_fft, hop_length=feature_cfg.hop_length)[0]
+    contrast = librosa.feature.spectral_contrast(y=y,
+                                                 sr=feature_cfg.sr, n_fft=feature_cfg.n_fft, hop_length=feature_cfg.hop_length)
+
+    # Time axis
+    t = librosa.frames_to_time(np.arange(len(centroid)), sr=sr)
+
+    if axes is None:
+        fig, axes = plt.subplots(5, 1, figsize=(12, 14), sharex=True)
+
+    # 1. Spectrogram + centroid + rolloff
+    img = librosa.display.specshow(S_db, sr=sr, x_axis='time', y_axis='mel', ax=axes[0])
+    axes[0].plot(t, centroid, label='Centroid', linewidth=2)
+    axes[0].plot(t, rolloff, label='Rolloff (85%)', linewidth=2)
+    axes[0].set(title=title)
+    axes[0].legend(loc='upper right')
+
+    # 2. Bandwidth
+    axes[1].plot(t, bandwidth)
+    axes[1].set(title='Spectral Bandwidth')
+
+    # 3. Flatness
+    axes[2].plot(t, flatness)
+    axes[2].set(title='Spectral Flatness')
+
+    # 4. Contrast (all bands)
+    for i in range(contrast.shape[0]):
+        axes[3].plot(t, contrast[i], label=f'Band {i}')
+    axes[3].set(title='Spectral Contrast')
+    axes[3].legend(ncol=2, fontsize=8)
+
+    # 5. Waveform (context)
+    librosa.display.waveshow(y, sr=sr, ax=axes[4])
+    axes[4].set(title='Waveform')
+
+    if axes is None:
+        plt.tight_layout()
+        return fig, axes

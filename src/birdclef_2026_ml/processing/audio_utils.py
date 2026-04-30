@@ -7,7 +7,10 @@ import librosa
 import soundfile as sf
 
 from birdclef_2026_ml.constants import SAMPLE_RATE
-from birdclef_2026_ml.paths import PATHS
+from birdclef_2026_ml.paths import load_project_paths
+
+
+PROJECT_PATHS = load_project_paths()
 
 
 def load_audio(
@@ -20,8 +23,8 @@ def load_audio(
     return y
 
 
-def get_path(pathroot: str, filename: str | Path | None = None) -> Path:
-    root = Path(PATHS[pathroot])
+def get_path(pathroot: str | Path, filename: str | Path | None = None) -> Path:
+    root = Path(pathroot)
     if filename is None:
         return root
     return root / Path(filename)
@@ -39,7 +42,7 @@ def build_audio_path(
 
 def build_audio_path_row(
     row,
-    pathroot: str,
+    pathroot: str | Path,
     filename_col: str = "filename",
 ) -> Path:
     return get_path(pathroot, filename=row[filename_col])
@@ -48,7 +51,7 @@ def build_audio_path_row(
 def load_train_audio(
     df,
     idx: int,
-    pathroot: str = "train_audio_dir",
+    pathroot: str | Path = PROJECT_PATHS.train_audio_dir,
     filename_col: str = "filename",
     sr: int = SAMPLE_RATE,
 ):
@@ -65,7 +68,7 @@ def load_train_audio(
 def load_soundscape_audio(
     soundscapes,
     idx: int,
-    pathroot: str = "train_soundscapes_dir",
+    pathroot: str | Path = PROJECT_PATHS.train_soundscapes_dir,
     filename_col: str = "filename",
     start_col: str = "start_sec",
     end_col: str = "end_sec",
@@ -92,7 +95,7 @@ def load_soundscape_audio(
     return y, audio_path, offset_seconds, end_seconds
 
 
-def get_duration(filepath: str | Path, pathroot: str = "train_audio_dir"):
+def get_duration(filepath: str | Path, pathroot: str | Path = PROJECT_PATHS.train_audio_dir):
     filepath = Path(filepath)
     audio_path = filepath if filepath.is_absolute() else get_path(pathroot, filepath)
     info = sf.info(audio_path)

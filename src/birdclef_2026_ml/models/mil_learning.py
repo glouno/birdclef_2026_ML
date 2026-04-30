@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+
 from typing import Any, Callable, Iterable
 from pathlib import Path
 
@@ -10,23 +10,7 @@ from birdclef_2026_ml.configs import PipelineConfig, MILConfig
 from birdclef_2026_ml.processing.audio_utils import build_audio_path, get_path, load_audio
 from birdclef_2026_ml.feature_engineering.chunking import get_sliding_window_intervals
 from birdclef_2026_ml.feature_engineering.utils import joblib_to_frame_features
-
-
-Array1D = np.ndarray
-Array2D = np.ndarray
-
-
-@dataclass
-class MILFeatureBags:
-    bags: list[Array2D]
-    feature_names: list[str]
-    bag_ids: Array1D | None = None
-
-    def __len__(self) -> int:
-        return len(self.bags)
-
-    def __iter__(self):
-        return iter(self.bags)
+from birdclef_2026_ml.models.artifacts import MILFeatureBags, Array1D, Array2D
 
 
 def _validate_mil_enabled(mil_mode: bool, mil_config: MILConfig | None) -> None:

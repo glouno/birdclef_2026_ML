@@ -1,286 +1,280 @@
 import argparse
-import pandas as pd
-import numpy as np
 from pathlib import Path
-import joblib
 
-from birdclef_2026_ml.processing.audio_utils import build_audio_path, load_audio, load_config
-from birdclef_2026_ml.audio import apply_spectral_gating, build_profile
+import joblib
+import pandas as pd
+
+from birdclef_2026_ml.audio import apply_spectral_gating
 from birdclef_2026_ml.configs import PipelineConfig, SpectralGatingConfig
-from birdclef_2026_ml.feature_engineering import save_features_from_audio_dir
+from birdclef_2026_ml.feature_engineering import (
+    build_profile,
+    save_features_from_audio_dir,
+    save_pooled_features_from_mel_dir,
+    save_profiles,
+)
+from birdclef_2026_ml.paths import ProjectPaths, load_project_paths
+from birdclef_2026_ml.processing.audio_utils import load_config
+from birdclef_2026_ml.processing.feature_dataset_builder import (
+    build_memmap_from_chunks,
+    reduce_feature_memmap,
+)
+from birdclef_2026_ml.processing.memmap_dataset import load_memmap_dataset
 from birdclef_2026_ml.processing.preprocess import preprocess_datasets_for_models
-from birdclef_2026_ml.processing.feature_dataset_builder import build_memmap_from_chunks
-from birdclef_2026_ml.paths import PATHS, DATA_ROOT, MODELS_ROOT
-from birdclef_2026_ml.training.model_training import train_and_save_ovr_models_chunks
+from birdclef_2026_ml.training.model_training import (
+    calibrate_and_save_ovr_models_chunks,
+    tune_and_save_ovr_thresholds,
+    train_and_save_ovr_models_chunks,
+)
+
+
+DATASET_CHOICES = ("train", "soundscapes")
+STAGE_CHOICES = ("raw", "clean")
+FEATURE_KIND_CHOICES = ("mel", "pooled")
+
+
+def _dataset_frame(paths: ProjectPaths, dataset: str) -> Path:
+    return paths.dataset_frame(dataset)
+
+
+def _audio_dir(paths: ProjectPaths, dataset: str, stage: str) -> Path:
+    try:
+        return paths.audio_dir(dataset, stage)
+    except KeyError as exc:
+        raise ValueError(f"Unsupported dataset/stage pair: {dataset}/{stage}") from exc
+
+
+def _feature_dir(paths: ProjectPaths, dataset: str, kind: str) -> Path:
+    try:
+        return paths.feature_dir(dataset, kind)
+    except KeyError as exc:
+        raise ValueError(f"Unsupported dataset/kind pair: {dataset}/{kind}") from exc
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    # Optionally add more arguments for configs if needed
     parser = argparse.ArgumentParser(prog="birdclef", description="BirdCLEF data utilities")
+    parser.add_argument(
+        "--project-config",
+        type=str,
+        default=None,
+        help="Path to project YAML config. Defaults to configs/project.yaml or BIRDCLEF_CONFIG.",
+    )
     subparsers = parser.add_subparsers(dest="command")
 
     parser_fit_ovr_models_chunks = subparsers.add_parser(
         "train-ovr-models-chunks",
-        help="Train OVR models per chunks"
+        help="Train OVR models for one saved run.",
     )
-    parser_fit_ovr_models_chunks.add_argument(
-        "--run-name",
+    parser_fit_ovr_models_chunks.add_argument("--run-name", type=str, required=True)
+    parser_fit_ovr_models_chunks.add_argument("--experiment", type=str, required=True)
+
+    parser_calibrate_ovr_models_chunks = subparsers.add_parser(
+        "calibrate-ovr-models-chunks",
+        help="Calibrate pretrained OVR models for one saved run and experiment.",
+    )
+    parser_calibrate_ovr_models_chunks.add_argument("--run-name", type=str, required=True)
+    parser_calibrate_ovr_models_chunks.add_argument("--experiment", type=str, required=True)
+    parser_calibrate_ovr_models_chunks.add_argument("--calibration", type=str, required=True)
+
+    parser_tune_ovr_thresholds = subparsers.add_parser(
+        "tune-ovr-thresholds",
+        help="Tune per-class decision thresholds for saved OVR artifacts.",
+    )
+    parser_tune_ovr_thresholds.add_argument("--run-name", type=str, required=True)
+    parser_tune_ovr_thresholds.add_argument("--experiment", type=str, required=True)
+    parser_tune_ovr_thresholds.add_argument("--score", type=str, default="macro_f1")
+    parser_tune_ovr_thresholds.add_argument("--model-filename", type=str, default=None)
+    parser_tune_ovr_thresholds.add_argument(
+        "--target-name",
         type=str,
-        required=True,
-        help=f"Directory in {MODELS_ROOT} where data is located and trained models will be saved"
+        default="class_name",
+        choices=("class_name", "primary_label"),
     )
-    parser_fit_ovr_models_chunks.add_argument(
-        "--split-train-val",
-        action="store_true",
-        help="If passed, then dataset is split into train/validation sets"
-    )
+    parser_tune_ovr_thresholds.add_argument("--max-rounds", type=int, default=2)
 
     parser_build_feature_matrices = subparsers.add_parser(
         "build-feature-matrices",
-        help="Build features matrices for train/validation datasets."
+        help="Build feature matrices from audio + cached mel or pooled features.",
     )
-    parser_build_feature_matrices.add_argument(
-        "--input-df",
-        type=str,
-        required=True,
-        help="Key in PATHS for preprocessed input df"
-    )
-    parser_build_feature_matrices.add_argument(
-        "--input-audio-dir",
-        type=str,
-        required=True,
-        help="Key in PATHS for input audio files directory."
-    )
-    parser_build_feature_matrices.add_argument(
-        "--input-features-dir",
-        type=str,
-        required=True,
-        help="Key in PATHS for input audio extracted features (.joblib) directory."
-    )
-    parser_build_feature_matrices.add_argument(
-        "--output-folder",
-        type=str,
-        required=True,
-        help="Folder inside paths.MODELS_ROOT where to save extracted matrices."
-    )
-    parser_build_feature_matrices.add_argument(
-        "--soundscapes",
-        action="store_true",
-        help="If set, process soundscapes; otherwise, process clean train audio."
-    )
+    parser_build_feature_matrices.add_argument("--dataset", type=str, required=True, choices=DATASET_CHOICES)
+    parser_build_feature_matrices.add_argument("--audio-stage", type=str, default="clean", choices=STAGE_CHOICES)
+    parser_build_feature_matrices.add_argument("--feature-kind", type=str, default="mel", choices=FEATURE_KIND_CHOICES)
+    parser_build_feature_matrices.add_argument("--run-name", type=str, required=True)
+    parser_build_feature_matrices.add_argument("--profiles-path", type=str, default=None)
+    parser_build_feature_matrices.add_argument("--species-ids-path", type=str, default=None)
 
-    parser_mil_bags = subparsers.add_parser(
-        "train-val-mil-bags",
-        help="Create MIL bags for train/val datasets and save all artifacts."
+    parser_reduce_feature_matrices = subparsers.add_parser(
+        "reduce-feature-matrices",
+        help="Reduce saved feature matrices for one run.",
     )
-    parser_mil_bags.add_argument(
-        "--input-audio-dir",
-        type=str,
-        required=True,
-        help="Key in PATHS for input audio files directory."
-    )
-    parser_mil_bags.add_argument(
-        "--n-splits",
-        type=int,
-        default=50,
-        help="Number of splits"
-    )
-    parser_mil_bags.add_argument(
-        "--features-pathroot",
-        type=str,
-        default=None,
-        help="Optional key in PATHS to precomputed per-audio feature .joblib files.",
-    )
+    parser_reduce_feature_matrices.add_argument("--run-name", type=str, required=True)
+    parser_reduce_feature_matrices.add_argument("--target-mel-bins", type=int, default=32)
 
     parser_profiles = subparsers.add_parser(
         "build-profiles",
-        help="Build all audio profiles and save to all_profiles.npy."
+        help="Build one species profile per label from one run.",
     )
+    parser_profiles.add_argument("--run-name", type=str, required=True)
     parser_profiles.add_argument(
-        "--output-path-key",
+        "--pooling-method",
         type=str,
-        default="profiles",
-        help="Key in PATHS for output profiles directory."
+        default="median",
+        choices=["median", "trimmed_mean", "mean"],
     )
-    parser_profiles.add_argument(
-        "--n-mels",
-        type=int,
-        default=128,
-        help="Number of mel bands."
-    )
-    parser_profiles.add_argument(
-        "--input-train-key",
-        type=str,
-        default="proc_train",
-        help="Key in PATHS for processed train parquet."
-    )
-    parser_profiles.add_argument(
-        "--spectral-gating-config-path",
-        type=str,
-        default=None,
-        help="Path to config.json for spectral gating (optional, overrides default)."
-    )
+    parser_profiles.add_argument("--trim-ratio", type=float, default=0.1)
 
     parser_spectral_gating = subparsers.add_parser(
         "spectral-gating",
-        help="Apply spectral gating to audio files and save cleaned audio."
+        help="Apply spectral gating to dataset audio, save cleaned files in interim.",
     )
-    parser_spectral_gating.add_argument("--df-input-path", type=str, required=True,
-                                        help="Key in PATHS for input DataFrame (parquet)")
-    parser_spectral_gating.add_argument("--config-path", type=str, required=True,
-                                        help="Path to config.json file with all spectral gating parameters.")
-    parser_spectral_gating.add_argument("--input-root", type=str, required=True,
-                                        help="Key in PATHS for input audio root")
-    parser_spectral_gating.add_argument("--output-root", type=str, required=True,
-                                        help="Key in PATHS for output audio root")
-    parser_spectral_gating.add_argument("--filename-col", type=str, default="filename",
-                                        help="Column name for filenames in DataFrame")
-
-    # def add_common_args(cmd_parser: argparse.ArgumentParser):
-    #     cmd_parser.add_argument("--input", type=str, default=None, help="Input CSV path")
-    #     cmd_parser.add_argument("--output", type=str, default=None, help="Output Parquet path")
+    parser_spectral_gating.add_argument("--dataset", type=str, required=True, choices=DATASET_CHOICES)
+    parser_spectral_gating.add_argument("--config-path", type=str, default=None)
+    parser_spectral_gating.add_argument("--input-stage", type=str, default="raw", choices=STAGE_CHOICES)
+    parser_spectral_gating.add_argument("--output-stage", type=str, default="clean", choices=STAGE_CHOICES)
+    parser_spectral_gating.add_argument("--filename-col", type=str, default="filename")
 
     subparsers.add_parser(
         "preprocess-datasets-for-models",
-        help="Preprocess train.csv and soundscapes for modeling",
+        help="Preprocess train and soundscape metadata for modeling.",
     )
 
     parser_mel = subparsers.add_parser(
         "extract-all-features",
-        help="Extract all features for all audios in a PATHS directory and save .joblib files.",
+        help="Extract raw log-mel spectrograms for one dataset.",
     )
-    parser_mel.add_argument(
-        "--input-df",
-        type=str,
-        required=True,
-        help="Key in PATHS for input audios dataframe.",
+    parser_mel.add_argument("--dataset", type=str, required=True, choices=DATASET_CHOICES)
+    parser_mel.add_argument("--audio-stage", type=str, default="clean", choices=STAGE_CHOICES)
+
+    parser_pool_mel = subparsers.add_parser(
+        "pool-mel-features",
+        help="Pool precomputed mel spectrograms into tabular features.",
     )
-    parser_mel.add_argument(
-        "--input-audio-dir",
-        type=str,
-        required=True,
-        help="Key in PATHS for input audios directory.",
-    )
-    parser_mel.add_argument(
-        "--output-audio-dir",
-        type=str,
-        required=True,
-        help="Optional key in PATHS for output directory. Defaults to data/processed/features.",
-    )
+    parser_pool_mel.add_argument("--dataset", type=str, required=True, choices=DATASET_CHOICES)
+    parser_pool_mel.add_argument("--input-kind", type=str, default="mel", choices=("mel",))
+    parser_pool_mel.add_argument("--output-kind", type=str, default="pooled", choices=("pooled",))
 
     return parser
 
 
-def _run_preprocess_datasets_for_models(args):
-    train = pd.read_csv(PATHS["raw_train"])
-    soundscapes = pd.read_csv(PATHS["raw_soundscapes"])
-    taxonomy = pd.read_csv(PATHS["taxonomy"])
+def _run_preprocess_datasets_for_models(paths: ProjectPaths):
+    train = pd.read_csv(paths.metadata_train)
+    soundscapes = pd.read_csv(paths.metadata_soundscapes)
+    taxonomy = pd.read_csv(paths.taxonomy)
 
     train_proc, ss_proc, le_pl, le_cn = preprocess_datasets_for_models(train, soundscapes, taxonomy)
 
-    # Ensure output directories exist
-    for key in ("proc_train", "proc_soundscapes"):
-        PATHS[key].parent.mkdir(parents=True, exist_ok=True)
-    PATHS["label_encoders"].mkdir(parents=True, exist_ok=True)
+    paths.train_processed.parent.mkdir(parents=True, exist_ok=True)
+    paths.soundscapes_processed.parent.mkdir(parents=True, exist_ok=True)
+    paths.label_encoders_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save processed data
-    # train_proc.to_parquet(PATHS["proc_train"], index=False)
-    ss_proc.to_parquet(PATHS["proc_soundscapes"], index=False)
-    # Save label encoders
-    label_encoders_path = Path(PATHS["label_encoders"])
-    joblib.dump(le_pl, label_encoders_path / "primary_label.joblib")
-    joblib.dump(le_cn, label_encoders_path / "class_name.joblib")
+    train_proc.to_parquet(paths.train_processed, index=False)
+    ss_proc.to_parquet(paths.soundscapes_processed, index=False)
+    joblib.dump(le_pl, paths.label_encoders_dir / "primary_label.joblib")
+    joblib.dump(le_cn, paths.label_encoders_dir / "class_name.joblib")
 
 
-def _run_build_profiles(args):
-    # Load train DataFrame
-    train = pd.read_parquet(PATHS[args.input_train_key])
+def _run_build_profiles(args, paths: ProjectPaths):
+    dataset = load_memmap_dataset(args.run_name)
+    species_ids, profiles = build_profile(
+        dataset.X,
+        dataset.y,
+        dataset.feature_names,
+        pooling_method=args.pooling_method,
+        trim_ratio=args.trim_ratio,
+    )
 
-    # Load config
-    config_path = Path(args.spectral_gating_config_path)
-    cfg_dict = load_config(config_path)
-    spectral_gating_config = SpectralGatingConfig(**cfg_dict)
-
-    profiles = []
-    for idx in train.index:
-        y_clean_path = build_audio_path(train, idx, pathroot=PATHS["train_audio_spectral_gating_dir"])
-        y_clean = load_audio(y_clean_path, spectral_gating_config.sr)
-        profile = build_profile(
-            y_clean,
-            sr=spectral_gating_config.sr,
-            n_mels=args.n_mels,
-            n_fft=spectral_gating_config.n_fft,
-            hop_length=spectral_gating_config.hop_length
-        )
-        profiles.append(profile)
-
-    profiles = np.array(profiles)
-    output_path = PATHS[args.output_path_key] / "all_profiles.npy"
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    np.save(output_path, profiles)
-    print(f"Profiles saved to: {output_path}")
+    paths.profiles_dir.mkdir(parents=True, exist_ok=True)
+    profiles_path, species_ids_path = save_profiles(paths.profiles_dir, species_ids, profiles)
+    print(f"Profiles saved to: {profiles_path}")
+    print(f"Species ids saved to: {species_ids_path}")
 
 
-def _run_spectral_gating(args):
-    df_input_path = PATHS[args.df_input_path]
-    df = pd.read_parquet(df_input_path)
+def _run_spectral_gating(args, paths: ProjectPaths):
+    df = pd.read_parquet(_dataset_frame(paths, args.dataset))
     df = df.drop_duplicates(subset=["filename"]).reset_index(drop=True)
 
-    cfg_dict = load_config(Path(args.config_path))
+    cfg_dict = load_config(Path(args.config_path) if args.config_path else paths.spectral_gating_config)
     config = SpectralGatingConfig(**cfg_dict)
 
     apply_spectral_gating(
-        df,
-        config,
-        input_root=args.input_root,
-        output_root=args.output_root,
+        df=df,
+        config=config,
+        input_root=_audio_dir(paths, args.dataset, args.input_stage),
+        output_root=_audio_dir(paths, args.dataset, args.output_stage),
         filename_col=args.filename_col,
     )
 
 
-# def _run_train_val_mil_bags(args):
-#     df = pd.read_parquet(PATHS["proc_train"])
-#     save_train_val_mil_bags_streaming(df,
-#                                       pathroot=args.input_audio_dir,
-#                                       n_splits=args.n_splits,
-#                                       features_pathroot=args.features_pathroot)
-
-
-def _run_extract_all_features(args):
+def _run_extract_all_features(args, paths: ProjectPaths):
     pipeline_cfg = PipelineConfig()
-    df = pd.read_parquet(PATHS[args.input_df])
+    df = pd.read_parquet(_dataset_frame(paths, args.dataset))
 
-    n_saved = save_features_from_audio_dir(
+    save_features_from_audio_dir(
         df=df,
-        input_path=PATHS[args.input_audio_dir],
-        config_path=DATA_ROOT / "configs",
+        input_path=_audio_dir(paths, args.dataset, args.audio_stage),
+        config_path=paths.feature_config,
         pipeline_cfg=pipeline_cfg,
-        output_path=PATHS[args.output_audio_dir],
+        output_path=_feature_dir(paths, args.dataset, "mel"),
     )
 
 
-def _run_build_feature_matrices(args):
-    df = pd.read_parquet(PATHS[args.input_df])
-
+def _run_pool_mel_features(args, paths: ProjectPaths):
     pipeline_cfg = PipelineConfig()
-    pathroot = PATHS[args.input_audio_dir]
-    features_pathroot = PATHS[args.input_features_dir]
+    df = pd.read_parquet(_dataset_frame(paths, args.dataset))
 
-    out_path = MODELS_ROOT / args.output_folder
+    save_pooled_features_from_mel_dir(
+        df=df,
+        input_mel_dir=_feature_dir(paths, args.dataset, args.input_kind),
+        output_path=_feature_dir(paths, args.dataset, args.output_kind),
+        pipeline_cfg=pipeline_cfg,
+    )
+
+
+def _run_build_feature_matrices(args, paths: ProjectPaths):
+    df = pd.read_parquet(_dataset_frame(paths, args.dataset))
+    pipeline_cfg = PipelineConfig()
 
     build_memmap_from_chunks(
-        df,
+        df=df,
         pipeline_cfg=pipeline_cfg,
-        pathroot=pathroot,
+        pathroot=_audio_dir(paths, args.dataset, args.audio_stage),
         filename_col="filename",
-        features_pathroot=features_pathroot,
-        out_instances_path=out_path,
-        soundscapes=args.soundscapes,
+        features_pathroot=_feature_dir(paths, args.dataset, args.feature_kind),
+        out_instances_path=paths.run_dir(args.run_name) / "data",
+        soundscapes=args.dataset == "soundscapes",
+        profiles_path=Path(args.profiles_path) if args.profiles_path else None,
+        species_ids_path=Path(args.species_ids_path) if args.species_ids_path else None,
     )
+
+
+def _run_reduce_feature_matrices(args, paths: ProjectPaths):
+    run_path = paths.run_dir(args.run_name) / "data"
+    X_reduced, reduced_names = reduce_feature_memmap(run_path=run_path, target_mel_bins=args.target_mel_bins)
+    print(f"Reduced matrix saved in: {run_path}")
+    print(f"Reduced shape: {X_reduced.shape}")
+    print(f"Reduced feature count: {len(reduced_names)}")
 
 
 def _run_train_ovr_models_chunks(args):
-    train_and_save_ovr_models_chunks(args.run_name, args.split_train_val)
+    train_and_save_ovr_models_chunks(args.run_name, args.experiment)
+
+
+def _run_calibrate_ovr_models_chunks(args):
+    calibrate_and_save_ovr_models_chunks(
+        args.run_name,
+        args.experiment,
+        calibration_name=args.calibration,
+    )
+
+
+def _run_tune_ovr_thresholds(args):
+    tune_and_save_ovr_thresholds(
+        args.run_name,
+        args.experiment,
+        score_name=args.score,
+        model_filename=args.model_filename,
+        target_name=args.target_name,
+        max_rounds=args.max_rounds,
+    )
 
 
 def main(argv=None) -> int:
@@ -291,25 +285,39 @@ def main(argv=None) -> int:
         parser.print_help()
         return 0
 
+    paths = load_project_paths(args.project_config)
+
     if args.command == "build-feature-matrices":
-        _run_build_feature_matrices(args)
+        _run_build_feature_matrices(args, paths)
         return 0
-    elif args.command == "preprocess-datasets-for-models":
-        _run_preprocess_datasets_for_models(args)
+    if args.command == "reduce-feature-matrices":
+        _run_reduce_feature_matrices(args, paths)
         return 0
-    elif args.command == "spectral-gating":
-        _run_spectral_gating(args)
+    if args.command == "preprocess-datasets-for-models":
+        _run_preprocess_datasets_for_models(paths)
+        return 0
+    if args.command == "spectral-gating":
+        _run_spectral_gating(args, paths)
         print("Spectral gating completed.")
         return 0
-    elif args.command == "build-profiles":
-        _run_build_profiles(args)
+    if args.command == "build-profiles":
+        _run_build_profiles(args, paths)
         return 0
-    elif args.command == "extract-all-features":
-        _run_extract_all_features(args)
+    if args.command == "extract-all-features":
+        _run_extract_all_features(args, paths)
         return 0
-    elif args.command == "train-ovr-models-chunks":
+    if args.command == "pool-mel-features":
+        _run_pool_mel_features(args, paths)
+        return 0
+    if args.command == "train-ovr-models-chunks":
         _run_train_ovr_models_chunks(args)
         return 0
-    else:
-        parser.error(f"Unknown command: {args.command}")
-        return 2
+    if args.command == "calibrate-ovr-models-chunks":
+        _run_calibrate_ovr_models_chunks(args)
+        return 0
+    if args.command == "tune-ovr-thresholds":
+        _run_tune_ovr_thresholds(args)
+        return 0
+
+    parser.error(f"Unknown command: {args.command}")
+    return 2

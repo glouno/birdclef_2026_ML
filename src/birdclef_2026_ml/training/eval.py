@@ -18,7 +18,30 @@ from sklearn.preprocessing import MultiLabelBinarizer, label_binarize
 from birdclef_2026_ml.feature_engineering import build_feature_vector, build_mil_feature_matrix
 from birdclef_2026_ml.configs import PipelineConfig
 from birdclef_2026_ml.models.one_vs_rest_models import OneVsRestArtifacts, predict_proba_one_vs_rest
+from birdclef_2026_ml.paths import load_project_paths
 from birdclef_2026_ml.processing.audio_utils import get_path, load_audio
+
+
+def calc_macro_roc_auc(y_true, y_proba, classes):
+    y_true_bin = label_binarize(y_true, classes=classes)
+
+    aucs = []
+    valid_class_indices = []
+
+    for k in range(y_true_bin.shape[1]):
+        y_true_k = y_true_bin[:, k]
+        y_proba_k = y_proba[:, k]
+
+        # skip classes with only one label in test
+        if np.unique(y_true_k).size < 2:
+            continue
+
+        auc = roc_auc_score(y_true_k, y_proba_k)
+        aucs.append(auc)
+        valid_class_indices.append(k)
+
+    macro_roc_auc = np.mean(aucs) if len(aucs) > 0 else np.nan
+    return macro_roc_auc
 
 
 def evaluate_multiclass(
@@ -30,6 +53,8 @@ def evaluate_multiclass(
     approach: str,
 ):
     """Evaluate multiclass predictions with requested macro metrics."""
+    mask = ()
+
     y_true = np.asarray(y_true)
     y_pred = np.asarray(y_pred)
     y_proba = np.asarray(y_proba, dtype=float)
@@ -60,16 +85,7 @@ def evaluate_multiclass(
         y_true, y_pred, average="macro", zero_division=0
     )
 
-    y_true_bin = label_binarize(y_true, classes=classes)
-    try:
-        macro_roc_auc = roc_auc_score(
-            y_true_bin,
-            y_proba,
-            average="macro",
-            multi_class="ovr",
-        )
-    except ValueError:
-        macro_roc_auc = np.nan
+    macro_roc_auc = calc_macro_roc_auc(y_true, y_proba, classes)
 
     print(f"\n===== {target_name} | {approach} =====")
     print(f"n_samples={len(y_true)}")
@@ -148,7 +164,7 @@ def evaluate_soundscapes_multilabel(
     filename_col: str = "filename",
     start_col: str = "start_sec",
     end_col: str = "end_sec",
-    pathroot: str = "train_soundscapes_dir",
+    pathroot: str = str(load_project_paths().train_soundscapes_dir),
     threshold: float = 0.5,
 ) -> dict[str, Any]:
     """Evaluate multilabel soundscape predictions from annotated segments.

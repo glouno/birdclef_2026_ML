@@ -25,6 +25,7 @@ dependencies = [
     "seaborn>=0.13.2",
     "soundfile>=0.13.1",
     "xgboost>=3.2.0",
+    "pyyaml>=6.0.3",
 ]
 
 
@@ -33,4 +34,3 @@ where = ["src"]
 
 [project.scripts]
 birdclef = "birdclef_2026_ml.cli:main"
-
