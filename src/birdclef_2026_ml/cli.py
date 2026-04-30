@@ -3,6 +3,7 @@ from pathlib import Path
 
 import joblib
 import pandas as pd
+import numpy as np
 
 from birdclef_2026_ml.audio import apply_spectral_gating
 from birdclef_2026_ml.configs import PipelineConfig, SpectralGatingConfig
@@ -160,7 +161,7 @@ def _run_preprocess_datasets_for_models(paths: ProjectPaths):
     soundscapes = pd.read_csv(paths.metadata_soundscapes)
     taxonomy = pd.read_csv(paths.taxonomy)
 
-    train_proc, ss_proc, le_pl, le_cn = preprocess_datasets_for_models(train, soundscapes, taxonomy)
+    train_proc, ss_proc, le_pl, le_cn, pl_to_cn_arr = preprocess_datasets_for_models(train, soundscapes, taxonomy)
 
     paths.train_processed.parent.mkdir(parents=True, exist_ok=True)
     paths.soundscapes_processed.parent.mkdir(parents=True, exist_ok=True)
@@ -170,6 +171,7 @@ def _run_preprocess_datasets_for_models(paths: ProjectPaths):
     ss_proc.to_parquet(paths.soundscapes_processed, index=False)
     joblib.dump(le_pl, paths.label_encoders_dir / "primary_label.joblib")
     joblib.dump(le_cn, paths.label_encoders_dir / "class_name.joblib")
+    np.save(paths.primary_to_class / "primary_to_class.npy", pl_to_cn_arr)
 
 
 def _run_build_profiles(args, paths: ProjectPaths):

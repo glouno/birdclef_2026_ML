@@ -73,6 +73,29 @@ def preprocess_soundscape(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+# def build_label_to_class_mapping(
+#     taxonomy: pd.DataFrame,
+#     le_class_name: LabelEncoder,
+#     le_primary_label: LabelEncoder,
+# ) -> dict[int, int]:
+#     pl = np.asarray(le_primary_label.transform(taxonomy["primary_label"]))
+#     cn = np.asarray(le_class_name.transform(taxonomy["class_name"]))
+#     return dict(zip(pl, cn))
+
+
+def build_label_to_class_array(
+    taxonomy: pd.DataFrame,
+    le_class_name: LabelEncoder,
+    le_primary_label: LabelEncoder,
+) -> np.ndarray:
+    pl = np.asarray(le_primary_label.transform(taxonomy["primary_label"]))
+    cn = np.asarray(le_class_name.transform(taxonomy["class_name"]))
+
+    out = np.empty(pl.max() + 1, dtype=cn.dtype)
+    out[pl] = cn
+    return out
+
+
 def preprocess_datasets_for_models(train: pd.DataFrame,
                                    soundscapes: pd.DataFrame,
                                    taxonomy: pd.DataFrame):
@@ -131,4 +154,7 @@ def preprocess_datasets_for_models(train: pd.DataFrame,
         )
     )
 
-    return train, soundscapes, le_primary_label, le_class_name
+    # pl_to_cn_dict = build_label_to_class_mapping(taxonomy, le_class_name, le_primary_label)
+    pl_to_cn_arr = build_label_to_class_array(taxonomy, le_class_name, le_primary_label)
+
+    return train, soundscapes, le_primary_label, le_class_name, pl_to_cn_arr

@@ -106,6 +106,7 @@ def train_and_save_ovr_models_chunks(run_name: str, experiment_name: str):
 
     label_encoder_class_name = joblib.load(paths.label_encoders_dir / "class_name.joblib")
     label_encoder_primary_label = joblib.load(paths.label_encoders_dir / "primary_label.joblib")
+    label_to_scope_mapping = np.load(paths.primary_to_class / "primary_to_class.npy")
 
     X_train = X
     y_train = y
@@ -125,6 +126,7 @@ def train_and_save_ovr_models_chunks(run_name: str, experiment_name: str):
         label_encoder_primary_label=label_encoder_primary_label,
         class_name_estimator=estimator,
         primary_label_estimator=estimator,
+        label_to_scope_mapping=label_to_scope_mapping,
         feature_names=feature_names,
         mil_mode=False,
         mil_config=None,
@@ -132,22 +134,22 @@ def train_and_save_ovr_models_chunks(run_name: str, experiment_name: str):
         epochs=10,
     )
 
-    stem = _artifact_stem(experiment_cfg)
-    if val_idx is not None:
-        X_val = X[val_idx]
-        probas = predict_proba_dual_one_vs_rest(artifacts, X_val)
-        preds = predict_dual_one_vs_rest(artifacts, X_val)
-        np.save(experiment_dir / f"{stem}_val_probas.npy", probas)
-        np.save(experiment_dir / f"{stem}_val_preds.npy", preds)
-        np.save(experiment_dir / "val_indices.npy", np.asarray(val_idx))
+    # stem = _artifact_stem(experiment_cfg)
+    # if val_idx is not None:
+    #     X_val = X[val_idx]
+    #     probas = predict_proba_dual_one_vs_rest(artifacts, X_val)
+    #     preds = predict_dual_one_vs_rest(artifacts, X_val)
+    #     np.save(experiment_dir / f"{stem}_val_probas.npy", probas)
+    #     np.save(experiment_dir / f"{stem}_val_preds.npy", preds)
+    #     np.save(experiment_dir / "val_indices.npy", np.asarray(val_idx))
 
-    joblib.dump(artifacts, experiment_dir / f"{stem}_ovr.joblib")
-    with open(experiment_dir / "resolved_config.yaml", "w", encoding="utf-8") as handle:
-        yaml.safe_dump(experiment_cfg.to_dict(), handle, sort_keys=False)
-    with open(experiment_dir / "config_source.txt", "w", encoding="utf-8") as handle:
-        handle.write(str(config_path.resolve()))
-    with open(experiment_dir / "run_source.txt", "w", encoding="utf-8") as handle:
-        handle.write(str(run_path.resolve()))
+    # joblib.dump(artifacts, experiment_dir / f"{stem}_ovr.joblib")
+    # with open(experiment_dir / "resolved_config.yaml", "w", encoding="utf-8") as handle:
+    #     yaml.safe_dump(experiment_cfg.to_dict(), handle, sort_keys=False)
+    # with open(experiment_dir / "config_source.txt", "w", encoding="utf-8") as handle:
+    #     handle.write(str(config_path.resolve()))
+    # with open(experiment_dir / "run_source.txt", "w", encoding="utf-8") as handle:
+    #     handle.write(str(run_path.resolve()))
 
 
 def calibrate_and_save_ovr_models_chunks(
@@ -178,12 +180,14 @@ def calibrate_and_save_ovr_models_chunks(
     x_val = dataset.X[val_idx]
     y_val = dataset.y[val_idx]
     artifacts = joblib.load(model_path)
+    label_to_scope_mapping = np.load(paths.primary_to_class / "primary_to_class.npy")
 
     calibrated_artifacts = calibrate_dual_one_vs_rest_artifacts(
         artifacts,
         x_cal=x_val,
         y_class_name=y_val[:, 0],
         y_primary_label=y_val[:, 1],
+        label_to_scope_mapping=label_to_scope_mapping,
         **calibration_params,
     )
 

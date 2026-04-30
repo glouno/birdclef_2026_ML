@@ -41,6 +41,7 @@ class ProjectPaths:
     test_soundscapes_dir: Path
     train_processed: Path
     soundscapes_processed: Path
+    primary_to_class: Path
     spectral_gating_config: Path
     feature_config: Path
     train_audio_clean_dir: Path
@@ -128,6 +129,7 @@ def _build_paths(config_data: dict[str, Any], *, project_root: Path, config_file
         soundscapes_processed=processed_dir / processed["soundscapes"],
         label_encoders_dir=processed_dir / "label_encoders",
         profiles_dir=processed_dir / "features" / "profiles",
+        primary_to_class=processed_dir / "metadata",
 
         train_audio_clean_dir=interim_dir / audio["train_clean"],
         soundscapes_clean_dir=interim_dir / audio["soundscapes_clean"],

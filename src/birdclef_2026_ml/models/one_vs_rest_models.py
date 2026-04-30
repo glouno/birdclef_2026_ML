@@ -36,20 +36,20 @@ from birdclef_2026_ml.models.artifacts import (
 )
 
 
-def _build_label_to_scope_mapping(
-    y_enc: Array1D,
-    y_scope: Array1D,
-    y_enc_label_encoder: LabelEncoder,
-) -> dict[int, Any]:
-    """Build mapping from encoded label id to its unique scope value."""
-    label_to_scope_mapping: dict[int, Any] = {}
-    for class_id, label in enumerate(y_enc_label_encoder.classes_):
-        scope_values = np.unique(y_scope[y_enc == class_id])
-        # label_encoder is fitted on taxonomy, not all species in taxonomy appear in train
-        if len(scope_values) == 0:
-            continue
-        label_to_scope_mapping[class_id] = scope_values[0]
-    return label_to_scope_mapping
+# def _build_label_to_scope_mapping(
+#     y_enc: Array1D,
+#     y_scope: Array1D,
+#     y_enc_label_encoder: LabelEncoder,
+# ) -> dict[int, Any]:
+#     """Build mapping from encoded label id to its unique scope value."""
+#     label_to_scope_mapping: dict[int, Any] = {}
+#     for class_id, label in enumerate(y_enc_label_encoder.classes_):
+#         scope_values = np.unique(y_scope[y_enc == class_id])
+#         # label_encoder is fitted on taxonomy, not all species in taxonomy appear in train
+#         if len(scope_values) == 0:
+#             continue
+#         label_to_scope_mapping[class_id] = scope_values[0]
+#     return label_to_scope_mapping
 
 
 def restrict_by_scope_value(y_scope: Array1D) -> dict[int, Array1D]:
@@ -76,7 +76,7 @@ def _fit_per_class_ovr_incremental(
     sample_weight_scopes: dict[int, Array1D] | None,
     idx_mapping_scopes: dict[int, Array1D] | None,
     pos_neg_weights_scopes,
-    label_to_scope_mapping,
+    label_to_scope_mapping: dict[int, int] | None,
     label_encoder: LabelEncoder,
     batch_size: int,
     epochs: int = 1,
@@ -95,24 +95,10 @@ def _fit_per_class_ovr_incremental(
     if idx_mapping_scopes is None:
         scalers: StandardScaler | dict[Any, StandardScaler] = StandardScaler()
         scalers.fit(x)
-        # for start in range(0, len(y_enc), batch_size):
-        #     stop = min(start + batch_size, len(y_enc))
-        #     batch_idx = np.arange(start, stop, dtype=np.int64)
-        #     x_batch = np.asarray(x[batch_idx], dtype=float)
-        #     if x_batch.shape[0] == 0:
-        #         continue
-        #     scalers.partial_fit(x_batch)
     else:
         scalers = {}
         for scope_value, scope_idx in idx_mapping_scopes.items():
             scaler = StandardScaler()
-            # for start in range(0, len(scope_idx), batch_size):
-            #     stop = min(start + batch_size, len(scope_idx))
-            #     batch_idx = scope_idx[start:stop]
-            #     x_batch = np.asarray(x[batch_idx], dtype=float)
-            #     if x_batch.shape[0] == 0:
-            #         continue
-            #     scaler.partial_fit(x_batch)
             scaler.fit(x[scope_idx])
             scalers[scope_value] = scaler
 
@@ -124,6 +110,7 @@ def _fit_per_class_ovr_incremental(
         scope_value = None
         pnw = None
         if label_to_scope_mapping is not None:
+            print(label_to_scope_mapping, class_id)
             scope_value = label_to_scope_mapping[class_id]
             idx = idx_mapping_scopes[scope_value]
             sw = sample_weight_scopes[scope_value]
@@ -212,6 +199,7 @@ def train_one_vs_rest_model(
         estimator: Any,
         feature_names: list[str],
         y_scope: Array1D | None = None,
+        label_to_scope_mapping: dict[int, int] | None,
         mil_mode: bool = False,
         mil_config: MILConfig | None = None,
         batch_size: int,
@@ -247,7 +235,6 @@ def train_one_vs_rest_model(
     # Compute scope related mappings
     sample_weight_scopes = None
     idx_mapping_scopes = None
-    label_to_scope_mapping = None
     pos_neg_weights_scopes = None
     pos_neg_weights = compute_pos_neg_weights(y_fit)
 
@@ -262,7 +249,7 @@ def train_one_vs_rest_model(
             )
             for scope_value, idx in idx_mapping_scopes.items()
         }
-        label_to_scope_mapping = _build_label_to_scope_mapping(y_fit, y_scope_fit, label_encoder)
+        # label_to_scope_mapping = _build_label_to_scope_mapping(y_fit, y_scope_fit, label_encoder)
         pos_neg_weights_scopes = compute_pos_neg_weights_scopes(y_fit, y_scope_fit)
 
     model = _fit_per_class_ovr_incremental(
@@ -318,6 +305,7 @@ def train_dual_one_vs_rest_models(
         label_encoder_primary_label: LabelEncoder,
         class_name_estimator: Any,
         primary_label_estimator: Any,
+        label_to_scope_mapping: dict[int, int],
         feature_names: list[str],
         mil_mode: bool = False,
         mil_config: MILConfig | None = None,
@@ -338,6 +326,7 @@ def train_dual_one_vs_rest_models(
         label_encoder=label_encoder_class_name,
         estimator=class_name_estimator,
         feature_names=feature_names,
+        label_to_scope_mapping=None,
         mil_mode=mil_mode,
         mil_config=mil_config,
         batch_size=batch_size,
@@ -346,6 +335,7 @@ def train_dual_one_vs_rest_models(
         verbose=verbose,
         # fit_idx=fit_idx,
     )
+
     primary_label_artifacts = train_one_vs_rest_model(
         x=x,
         y_enc=y_primary_label,
@@ -353,6 +343,7 @@ def train_dual_one_vs_rest_models(
         estimator=primary_label_estimator,
         feature_names=feature_names,
         y_scope=y_class_name,
+        label_to_scope_mapping=label_to_scope_mapping,
         mil_mode=mil_mode,
         mil_config=mil_config,
         batch_size=batch_size,

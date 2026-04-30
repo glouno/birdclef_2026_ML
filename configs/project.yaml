@@ -1,0 +1,32 @@
+storage:
+  raw_dir: data/raw
+  interim_dir: data/interim
+  processed_dir: data/processed
+  external_dir: data/external
+  artifacts_dir: artifacts
+  models_dir: artifacts/models
+  reports_dir: reports
+
+datasets:
+  metadata:
+    train: train.csv
+    soundscapes: train_soundscapes_labels.csv
+    taxonomy: taxonomy.csv
+    sample_submission: sample_submission.csv
+  audio:
+    train: train_audio
+    soundscapes: train_soundscapes
+    test_soundscapes: test_soundscapes
+    train_clean: spectral_gating/train_audio
+    soundscapes_clean: spectral_gating/train_soundscapes
+    train_mel: features/mel/train_audio
+    soundscapes_mel: features/mel/train_soundscapes
+    train_pooled: features/pooled/train_audio
+    soundscapes_pooled: features/pooled/train_soundscapes
+  processed:
+    train: metadata/train.parquet
+    soundscapes: metadata/train_soundscapes_labels.parquet
+
+configs:
+  spectral_gating: data/configs/spectral_gating.json
+  features: data/configs/features/feature_config.json

@@ -12,7 +12,7 @@ from birdclef_2026_ml.models.artifacts import (
     OneVsRestArtifacts,
     PerClassOneVsRestClassifier,
 )
-from birdclef_2026_ml.models.one_vs_rest_models import _build_label_to_scope_mapping, restrict_by_scope_value
+from birdclef_2026_ml.models.one_vs_rest_models import restrict_by_scope_value
 from birdclef_2026_ml.models.weights import (
     compute_pos_neg_sample_weights,
     compute_pos_neg_weights,
@@ -52,16 +52,12 @@ def _calibrate_per_class_ovr_classifier(
     *,
     label_encoder: LabelEncoder,
     y_scope: Array1D | None = None,
+    label_to_scope_mapping: dict[int, int],
     **calibration_params: Any,
 ) -> PerClassOneVsRestClassifier:
     y_enc = np.asarray(y_enc)
     x_cal = np.asarray(x_cal, dtype=float)
     idx_mapping_scopes = restrict_by_scope_value(np.asarray(y_scope)) if y_scope is not None else None
-    label_to_scope_mapping = (
-        _build_label_to_scope_mapping(y_enc, np.asarray(y_scope), label_encoder)
-        if y_scope is not None
-        else None
-    )
     pos_neg_weights = compute_pos_neg_weights(y_enc)
     pos_neg_weights_scopes = (
         compute_pos_neg_weights_scopes(y_enc, np.asarray(y_scope))
@@ -133,6 +129,7 @@ def calibrate_one_vs_rest_artifacts(
     y_enc: Array1D,
     *,
     y_scope: Array1D | None = None,
+    label_to_scope_mapping: dict[int, int],
     **calibration_params: Any,
 ) -> OneVsRestArtifacts:
     if artifacts.mil_mode:
@@ -144,6 +141,7 @@ def calibrate_one_vs_rest_artifacts(
         y_enc=y_enc,
         label_encoder=artifacts.label_encoder,
         y_scope=y_scope,
+        label_to_scope_mapping=label_to_scope_mapping,
         **calibration_params,
     )
     return OneVsRestArtifacts(
@@ -159,6 +157,7 @@ def calibrate_dual_one_vs_rest_artifacts(
     x_cal: Array2D,
     y_class_name: Array1D,
     y_primary_label: Array1D,
+    label_to_scope_mapping: dict[int, int],
     **calibration_params: Any,
 ) -> DualOneVsRestArtifacts:
     return DualOneVsRestArtifacts(
@@ -166,6 +165,7 @@ def calibrate_dual_one_vs_rest_artifacts(
             artifacts.class_name,
             x_cal=x_cal,
             y_enc=y_class_name,
+            label_to_scope_mapping=label_to_scope_mapping,
             **calibration_params,
         ),
         primary_label=calibrate_one_vs_rest_artifacts(
@@ -173,6 +173,7 @@ def calibrate_dual_one_vs_rest_artifacts(
             x_cal=x_cal,
             y_enc=y_primary_label,
             y_scope=y_class_name,
+            label_to_scope_mapping=label_to_scope_mapping,
             **calibration_params,
         ),
     )
