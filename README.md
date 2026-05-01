@@ -1,29 +1,27 @@
 # BirdCLEF 2026 - Classical ML Pipeline
 
-Repo for BirdCLEF+ 2026 with non-deep-learning pipeline only.
+Repository for BirdCLEF+ 2026 using a classical (non-deep-learning) machine learning pipeline only.
 
-## Project layout
+## Project Layout
 
-- `data/raw`: original competition metadata + audio
-- `data/interim`: transient audio/cache artifacts
-- `data/processed`: model-ready metadata + stable derived assets
-- `artifacts/models/runs`: feature matrices, trained runs, predictions
-- `artifacts/models/runs/experiments`: experiment YAMLs + trained experiment outputs
-- `configs/project.yaml`: central path config
+- `data/raw`: Original competition metadata and audio files
+- `data/interim`: Transient audio and cache artifacts
+- `data/processed`: Model-ready metadata and stable derived assets
+- `artifacts/models/runs`: Feature matrices, trained models, and predictions
+- `artifacts/models/runs/experiments`: Experiment YAMLs and trained experiment outputs
+- `configs/project.yaml`: Central path configuration
 
-Use `data/interim` for reversible preprocessing. Spectral gating output lives there now.
+## Path and Config Management
 
-## Path/config management
+All project paths are resolved from [`configs/project.yaml`](configs/project.yaml).
 
-All project paths resolved from [`configs/project.yaml`](configs/project.yaml).
-
-Override config file:
+To override the config file:
 
 ```bash
 BIRDCLEF_CONFIG=/abs/path/to/project.yaml uv run python -m birdclef_2026_ml ...
 ```
 
-Override project root:
+To override the project root:
 
 ```bash
 PROJECT_ROOT=/abs/path/to/repo uv run python -m birdclef_2026_ml ...
@@ -31,17 +29,32 @@ PROJECT_ROOT=/abs/path/to/repo uv run python -m birdclef_2026_ml ...
 
 ## Preprocess metadata
 
+### Workflow
+
+1. Preprocess `train` and `soundscapes` metadata (convert `.csv` to `.parquet`).
+2. Apply spectral gating to both `train` and `soundscapes` audio files.
+3. Compute mel-spectrograms without time pooling. This accelerates the feature-building pipeline by allowing you to slice over time and experiment with different chunk durations. All other extracted audio features are computed from these mel-spectrograms.
+4. Calculate `primary_label` profiles (the idea is that different species operate at different frequencies).
+5. Define the run configuration (`FeatureConfig`, `ChunkConfig`, `MILConfig`) and extract all features, aggregating them per time chunk.
+6. [Optional] Reduce the number of features, e.g., by reducing the dimensionality of the mel-spectrogram from 128 to 32 mels.
+7. Train an `SGDClassifier` model to predict both `class_name` and `primary_label` (hierarchical approach).
+8.
+
+### Commands
+
+##### 1. Preprocess `train` and `soundscapes` metadata (CSV to Parquet)
+
 ```bash
 uv run python -m birdclef_2026_ml preprocess-datasets-for-models
 ```
 
-Writes:
+This command writes:
 
 - `data/processed/metadata/train.parquet`
 - `data/processed/metadata/train_soundscapes_labels.parquet`
 - `data/processed/label_encoders/*.joblib`
 
-## Spectral gating
+##### 2. Apply Spectral Gating to Both `train` and `soundscapes` Audio
 
 Train:
 
@@ -55,41 +68,69 @@ Soundscapes:
 uv run python -m birdclef_2026_ml spectral-gating --dataset soundscapes
 ```
 
-Input defaults to raw audio. Output defaults to `data/interim/spectral_gating/...`.
+The input defaults to raw audio. The output is written to `data/interim/spectral_gating/...`.
 
-## Extract mel spectrograms
+##### 3. Compute Mel-Spectrograms Without Time Pooling
 
 Train:
 
 ```bash
-uv run python -m birdclef_2026_ml extract-all-features --dataset train
+uv run python -m birdclef_2026_ml extract-mel-spectograms --dataset train
 ```
 
 Soundscapes:
 
 ```bash
-uv run python -m birdclef_2026_ml extract-all-features --dataset soundscapes
+uv run python -m birdclef_2026_ml extract-mel-spectograms --dataset soundscapes
 ```
 
-Writes raw log-mel `.npy` files to `data/interim/features/mel/...`.
+This writes raw log-mel `.npy` files to `data/interim/features/mel/...`.
 
-## Pool mel features
+##### 4. Calculate `primary_label` Profiles
 
-Train:
+Build profiles using global median pooling and, by default, trimmed mean with a threshold of 0.1.
 
 ```bash
-uv run python -m birdclef_2026_ml pool-mel-features --dataset train
+uv run python -m birdclef_2026_ml build-profiles
+```
+
+This command writes:
+
+- `data/processed/features/profiles/species_profiles.npy`
+- `data/processed/features/profiles/species_profile_ids.npy`
+
+##### 5. Extract All Features and Aggregate Per Time Chunk
+
+Define the pipeline configuration in:
+
+- `artifacts/models/runs/experiments/<run-name>/pipeline.yaml`
+
+To extract features from mel caches:
+
+```bash
+uv run python -m birdclef_2026_ml build-feature-matrices \
+  --dataset train \
+  --feature-kind mel \
+  --run-name <run-name>
 ```
 
 Soundscapes:
 
 ```bash
-uv run python -m birdclef_2026_ml pool-mel-features --dataset soundscapes
+uv run python -m birdclef_2026_ml build-feature-matrices \
+  --dataset soundscapes \
+  --feature-kind mel \
+  --run-name \
+  --soundscapes
 ```
 
-Writes pooled tabular features to `data/processed/features/pooled/...`.
+Run artifacts are stored under `artifacts/models/runs/<run-name>`.
+Soundscape outputs are suffixed with `_soundscape` (for example, `X_soundscape.dat`,
+`y_soundscape.dat`, and `feature_names_soundscape.npy`).
+MIL runs also write `bags_meta.npy`, where each row stores `[bag_id, chunk_id_within_bag]`.
+Soundscape MIL runs write `bags_meta_soundscape.npy`.
 
-Derived feature families include:
+The derived feature families include:
 
 - `mel_spectrogram`, `mel_spectrogram_delta`, `mel_spectrogram_delta2`
 - `spectral_centroid`, `spectral_bandwidth`, `spectral_rolloff`, `spectral_contrast`
@@ -99,105 +140,55 @@ Derived feature families include:
 - `glcm_*`
 - `lbp_hist`
 
-## Build feature matrices
+##### 6. [Optional] Reduce the Number of Features
 
-From mel caches:
+Train:
 
 ```bash
-uv run python -m birdclef_2026_ml build-feature-matrices \
-  --dataset train \
-  --feature-kind mel \
-  --run-name run_with_profiles \
-  --profiles-path data/processed/profiles/species_profiles.npy \
-  --species-ids-path data/processed/profiles/species_profile_ids.npy
+uv run python -m birdclef_2026_ml reduce-feature-matrices \
+  --run-name <run-name> \
+  --target-mel-bins 32
 ```
 
 Soundscapes:
 
 ```bash
-uv run python -m birdclef_2026_ml build-feature-matrices \
-  --dataset soundscapes \
-  --feature-kind mel \
-  --run-name run_soundscapes
-```
-
-Run artifacts stored under `artifacts/models/runs/<run-name>`.
-
-## Build profiles
-
-```bash
-uv run python -m birdclef_2026_ml build-profiles --run-name run_with_profiles
-```
-
-Writes:
-
-- `data/processed/features/profiles/species_profiles.npy`
-- `data/processed/features/profiles/species_profile_ids.npy`
-
-## Reduce feature matrices
-
-```bash
 uv run python -m birdclef_2026_ml reduce-feature-matrices \
-  --run-name run_with_profiles \
+  --run-name <run-name> \
   --target-mel-bins 32
+  --soundscapes
 ```
 
-Writes reduced copies in same run dir:
+This writes reduced copies suffixed with `_reduced` in the same run directory:
 
-- `X_reduced.dat`
-- `y_reduced.dat`
-- `feature_names_reduced.npy`
-- `file_ids_reduced.npy`
-- `shape_X_reduced.npy`
-- `shape_y_reduced.npy`
-- `dtype_X_reduced.npy`
-- `dtype_y_reduced.npy`
+##### 7. Train an `SGDClassifier` Model to Predict Both `class_name` and `primary_label` (Hierarchical Approach)
 
-## Train OVR models
+###### Train One-vs-Rest (OVR) Models
 
-Define experiment config in:
+Define the experiment configuration in:
 
 - `artifacts/models/runs/experiments/<run-name>/<experiment-name>.yaml`
 
-Example:
-
-```yaml
-model:
-  type: SGDClassifier
-  params:
-    loss: log_loss
-    penalty: elasticnet
-    alpha: 1.0e-4
-    max_iter: 3000
-    tol: 1.0e-4
-    early_stopping: false
-    learning_rate: optimal
-    average: true
-    random_state: 42
-
-training:
-  batch_size: 128
-  epochs: 3
-  train_val_split: true
-```
-
-Best practice:
-
-- keep experiment YAML immutable after run
-- one YAML per named experiment
-- compare runs by changing few params at time
-- store outputs under run-scoped experiment folders
-
 ```bash
 uv run python -m birdclef_2026_ml train-ovr-models-chunks \
-  --run-name run_with_profiles \
+  --run-name <run-name> \
   --experiment sgd_baseline
 ```
 
-Outputs saved in:
+Outputs are saved in:
 
 - `artifacts/models/runs/<run-name>/experiments/<experiment-name>/`
-- includes trained model, val predictions, resolved config copy
+- Includes the trained model, validation predictions, and a resolved config copy
+
+The training configuration supports custom batch early stopping in the OVR loop:
+
+- `training.early_stopping`: enable validation-based stopping
+- `training.n_iter_no_change`: stop after this many epochs without val log-loss improvement
+- `training.tol`: minimum val log-loss improvement to reset patience
+
+When `training.early_stopping: true`, ensure `training.train_val_split: true` or provide validation data through the calling code.
+
+---
 
 ## Calibrate OVR models
 
@@ -205,23 +196,23 @@ Calibration is a separate post-training step. It loads the pretrained OVR artifa
 uses the saved validation fold from the experiment, and writes a calibrated copy
 without overwriting the original model.
 
-Requirement:
+Requirements:
 
 - `training.train_val_split: true` in the experiment config used for training
 - calibration YAML stored in `artifacts/models/runs/experiments/<run-name>/`
 
-Example calibration config:
+Example calibration configuration:
 
-`artifacts/models/runs/experiments/run_with_profiles/calibration_sigmoid.yaml`
+`artifacts/models/runs/experiments/<run-name>/calibration_sigmoid.yaml`
 
 ```bash
 uv run python -m birdclef_2026_ml calibrate-ovr-models-chunks \
-  --run-name run_with_profiles \
+  --run-name <run-name> \
   --experiment sgd_baseline \
   --calibration calibration_sigmoid
 ```
 
-Additional outputs saved in the same experiment dir:
+Additional outputs are saved in the same experiment directory:
 
 - `<model-stem>_ovr_calibrated_<calibration-name>.joblib`
 - `<model-stem>_val_probas_calibrated_<calibration-name>.npy`
@@ -230,11 +221,11 @@ Additional outputs saved in the same experiment dir:
 
 ## Tune OVR thresholds
 
-Threshold tuning is separate post-training step. It loads saved `.joblib` OVR
-artifacts, searches per-class probability thresholds on saved validation fold,
-maximizes chosen score, then saves new threshold-tuned artifacts.
+Threshold tuning is a separate post-training step. It loads saved `.joblib` OVR
+artifacts, searches for per-class probability thresholds on the saved validation fold,
+maximizes the chosen score, and then saves new threshold-tuned artifacts.
 
-Requirement:
+Requirements:
 
 - `training.train_val_split: true` in experiment config used for training
 
@@ -250,37 +241,37 @@ Supported scores:
 - `accuracy`
 - `balanced_accuracy`
 
-Tune default saved dual artifact:
+To tune the default saved dual artifact:
 
 ```bash
 uv run python -m birdclef_2026_ml tune-ovr-thresholds \
-  --run-name run_with_profiles \
+  --run-name <run-name> \
   --experiment sgd_baseline \
   --score macro_f1
 ```
 
-Tune calibrated artifact:
+To tune a calibrated artifact:
 
 ```bash
 uv run python -m birdclef_2026_ml tune-ovr-thresholds \
-  --run-name run_with_profiles \
+  --run-name <run-name> \
   --experiment sgd_baseline \
   --model-filename sgdclassifier_ovr_calibrated_calibration_sigmoid.joblib \
   --score macro_f1
 ```
 
-If input `.joblib` contains `OneVsRestArtifacts`, pass target:
+If the input `.joblib` contains `OneVsRestArtifacts`, pass the target:
 
 ```bash
 uv run python -m birdclef_2026_ml tune-ovr-thresholds \
-  --run-name run_with_profiles \
+  --run-name <run-name> \
   --experiment sgd_baseline \
   --model-filename some_single_target_model.joblib \
   --target-name primary_label \
   --score macro_f1
 ```
 
-Outputs saved in same experiment dir:
+Outputs are saved in the same experiment directory:
 
 - `<input-model-stem>_threshold_tuned_<score>.joblib`
 - `<input-model-stem>_threshold_tuned_<score>_val_preds.npy`
