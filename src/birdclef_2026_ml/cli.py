@@ -6,7 +6,11 @@ import pandas as pd
 import numpy as np
 
 from birdclef_2026_ml.audio import apply_spectral_gating
-from birdclef_2026_ml.configs import PipelineConfig, SpectralGatingConfig
+from birdclef_2026_ml.configs import (
+    PipelineConfig,
+    SpectralGatingConfig,
+    load_pipeline_config
+)
 from birdclef_2026_ml.feature_engineering import (
     build_profile,
     save_features_from_audio_dir,
@@ -145,13 +149,13 @@ def _build_parser() -> argparse.ArgumentParser:
     parser_mel.add_argument("--dataset", type=str, required=True, choices=DATASET_CHOICES)
     parser_mel.add_argument("--audio-stage", type=str, default="clean", choices=STAGE_CHOICES)
 
-    parser_pool_mel = subparsers.add_parser(
-        "pool-mel-features",
-        help="Pool precomputed mel spectrograms into tabular features.",
-    )
-    parser_pool_mel.add_argument("--dataset", type=str, required=True, choices=DATASET_CHOICES)
-    parser_pool_mel.add_argument("--input-kind", type=str, default="mel", choices=("mel",))
-    parser_pool_mel.add_argument("--output-kind", type=str, default="pooled", choices=("pooled",))
+    # parser_pool_mel = subparsers.add_parser(
+    #     "pool-mel-features",
+    #     help="Pool precomputed mel spectrograms into tabular features.",
+    # )
+    # parser_pool_mel.add_argument("--dataset", type=str, required=True, choices=DATASET_CHOICES)
+    # parser_pool_mel.add_argument("--input-kind", type=str, default="mel", choices=("mel",))
+    # parser_pool_mel.add_argument("--output-kind", type=str, default="pooled", choices=("pooled",))
 
     return parser
 
@@ -219,21 +223,22 @@ def _run_extract_all_features(args, paths: ProjectPaths):
     )
 
 
-def _run_pool_mel_features(args, paths: ProjectPaths):
-    pipeline_cfg = PipelineConfig()
-    df = pd.read_parquet(_dataset_frame(paths, args.dataset))
+# def _run_pool_mel_features(args, paths: ProjectPaths):
+#     pipeline_cfg = PipelineConfig()
+#     df = pd.read_parquet(_dataset_frame(paths, args.dataset))
 
-    save_pooled_features_from_mel_dir(
-        df=df,
-        input_mel_dir=_feature_dir(paths, args.dataset, args.input_kind),
-        output_path=_feature_dir(paths, args.dataset, args.output_kind),
-        pipeline_cfg=pipeline_cfg,
-    )
+#     save_pooled_features_from_mel_dir(
+#         df=df,
+#         input_mel_dir=_feature_dir(paths, args.dataset, args.input_kind),
+#         output_path=_feature_dir(paths, args.dataset, args.output_kind),
+#         pipeline_cfg=pipeline_cfg,
+#     )
 
 
 def _run_build_feature_matrices(args, paths: ProjectPaths):
     df = pd.read_parquet(_dataset_frame(paths, args.dataset))
-    pipeline_cfg = PipelineConfig()
+    pipeline_cfg = load_pipeline_config(args.run_name)
+    # Compose the path to the pipeline config YAML
 
     build_memmap_from_chunks(
         df=df,
@@ -241,15 +246,15 @@ def _run_build_feature_matrices(args, paths: ProjectPaths):
         pathroot=_audio_dir(paths, args.dataset, args.audio_stage),
         filename_col="filename",
         features_pathroot=_feature_dir(paths, args.dataset, args.feature_kind),
-        out_instances_path=paths.run_dir(args.run_name) / "data",
+        out_instances_path=paths.run_data_dir(args.run_name),
         soundscapes=args.dataset == "soundscapes",
-        profiles_path=Path(args.profiles_path) if args.profiles_path else None,
-        species_ids_path=Path(args.species_ids_path) if args.species_ids_path else None,
+        profiles_path=paths.profiles_dir / "species_profiles.npy",
+        species_ids_path=paths.profiles_dir / "species_profile_ids.npy"
     )
 
 
 def _run_reduce_feature_matrices(args, paths: ProjectPaths):
-    run_path = paths.run_dir(args.run_name) / "data"
+    run_path = paths.run_data_dir(args.run_name)
     X_reduced, reduced_names = reduce_feature_memmap(run_path=run_path, target_mel_bins=args.target_mel_bins)
     print(f"Reduced matrix saved in: {run_path}")
     print(f"Reduced shape: {X_reduced.shape}")
@@ -308,9 +313,9 @@ def main(argv=None) -> int:
     if args.command == "extract-all-features":
         _run_extract_all_features(args, paths)
         return 0
-    if args.command == "pool-mel-features":
-        _run_pool_mel_features(args, paths)
-        return 0
+    # if args.command == "pool-mel-features":
+    #     _run_pool_mel_features(args, paths)
+    #     return 0
     if args.command == "train-ovr-models-chunks":
         _run_train_ovr_models_chunks(args)
         return 0

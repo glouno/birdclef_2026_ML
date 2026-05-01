@@ -10,7 +10,7 @@ from birdclef_2026_ml.models.artifacts import (
     ThresholdTunedDualOneVsRestArtifacts,
     ThresholdTunedOneVsRestArtifacts,
 )
-from birdclef_2026_ml.models.one_vs_rest_models import predict_proba_one_vs_rest
+from birdclef_2026_ml.models.one_vs_rest import predict_proba_one_vs_rest
 
 Array1D = np.ndarray
 Array2D = np.ndarray

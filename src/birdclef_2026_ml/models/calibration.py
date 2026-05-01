@@ -12,7 +12,7 @@ from birdclef_2026_ml.models.artifacts import (
     OneVsRestArtifacts,
     PerClassOneVsRestClassifier,
 )
-from birdclef_2026_ml.models.one_vs_rest_models import restrict_by_scope_value
+from birdclef_2026_ml.models.one_vs_rest import restrict_by_scope_value
 from birdclef_2026_ml.models.weights import (
     compute_pos_neg_sample_weights,
     compute_pos_neg_weights,

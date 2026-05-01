@@ -134,6 +134,7 @@ def reduce_feature_memmap(run_path: Path, target_mel_bins: int = 32) -> tuple[np
 
 
 # TODO: adapt for soundscapes with start_sec, end_sec instead of custom chunking
+# Build feature matrices with pooling
 def build_memmap_from_chunks(
     df: pd.DataFrame,
     pipeline_cfg: PipelineConfig,
@@ -166,7 +167,7 @@ def build_memmap_from_chunks(
         )
     n_features = len(feature_names)
     n_instances = count_nb_chunks(df, pipeline_cfg.chunk, pipeline_cfg.feature.sr, pipeline_cfg.feature.hop_length)
-
+    print("Total number of instances", n_instances)
     out_instances_path.mkdir(parents=True, exist_ok=True)
     X = np.memmap(
         out_instances_path / "X.dat",

@@ -8,13 +8,13 @@ from sklearn.utils.class_weight import compute_sample_weight
 
 from birdclef_2026_ml.configs import MILConfig
 
-from birdclef_2026_ml.models.hierarchical_models import (
+from birdclef_2026_ml.models.hierarchical import (
     _predict_proba_aligned,
     _softmax_with_neg_inf,
     _to_1d,
     _validate_same_length,
 )
-from birdclef_2026_ml.models.mil_learning import (
+from birdclef_2026_ml.models.mil import (
     _validate_mil_enabled,
     flatten_mil_bags,
     predict_mil_proba,
@@ -313,6 +313,7 @@ def train_dual_one_vs_rest_models(
         epochs: int,
         n_jobs: int | None = None,
         verbose: int = 0,
+        scope: bool,
         # fit_idx: Array1D,
 ) -> DualOneVsRestArtifacts:
     """Train paired one-vs-rest models for class_name and primary_label."""
@@ -336,14 +337,20 @@ def train_dual_one_vs_rest_models(
         # fit_idx=fit_idx,
     )
 
+    y_scope = None
+    mapping = None
+    if scope:
+        y_scope = y_class_name
+        mapping = label_to_scope_mapping
+
     primary_label_artifacts = train_one_vs_rest_model(
         x=x,
         y_enc=y_primary_label,
         label_encoder=label_encoder_primary_label,
         estimator=primary_label_estimator,
         feature_names=feature_names,
-        y_scope=y_class_name,
-        label_to_scope_mapping=label_to_scope_mapping,
+        y_scope=y_scope,
+        label_to_scope_mapping=mapping,
         mil_mode=mil_mode,
         mil_config=mil_config,
         batch_size=batch_size,

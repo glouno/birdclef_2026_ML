@@ -8,15 +8,15 @@ from sklearn.linear_model import SGDClassifier
 from birdclef_2026_ml.configs import (
     CalibrationConfig,
     ExperimentConfig,
-    build_calibration_config,
-    build_experiment_config,
+    load_experiment_config,
+    load_calibration_config,
 )
 from birdclef_2026_ml.models.calibration import calibrate_dual_one_vs_rest_artifacts
 from birdclef_2026_ml.models.artifacts import (
     DualOneVsRestArtifacts,
     OneVsRestArtifacts,
 )
-from birdclef_2026_ml.models.one_vs_rest_models import (
+from birdclef_2026_ml.models.one_vs_rest import (
     train_dual_one_vs_rest_models,
     predict_proba_dual_one_vs_rest,
     predict_dual_one_vs_rest,
@@ -37,32 +37,32 @@ ESTIMATOR_REGISTRY = {
 }
 
 
-def load_experiment_config(run_name: str, experiment_name: str) -> tuple[ExperimentConfig, Path]:
-    paths = load_project_paths()
-    config_path = paths.experiment_config_path(run_name, experiment_name)
-    if not config_path.exists():
-        raise FileNotFoundError(
-            f"Experiment config not found: {config_path}. "
-            f"Create {experiment_name}.yaml under {config_path.parent}."
-        )
+# def load_experiment_config(run_name: str, experiment_name: str) -> tuple[ExperimentConfig, Path]:
+#     paths = load_project_paths()
+#     config_path = paths.experiment_config_path(run_name, experiment_name)
+#     if not config_path.exists():
+#         raise FileNotFoundError(
+#             f"Experiment config not found: {config_path}. "
+#             f"Create {experiment_name}.yaml under {config_path.parent}."
+#         )
 
-    with open(config_path, "r", encoding="utf-8") as handle:
-        payload = yaml.safe_load(handle) or {}
-    return build_experiment_config(payload), config_path
+#     with open(config_path, "r", encoding="utf-8") as handle:
+#         payload = yaml.safe_load(handle) or {}
+#     return build_experiment_config(payload), config_path
 
 
-def load_calibration_config(run_name: str, calibration_name: str) -> tuple[CalibrationConfig, Path]:
-    paths = load_project_paths()
-    config_path = paths.experiments_dir / run_name / f"{calibration_name}.yaml"
-    if not config_path.exists():
-        raise FileNotFoundError(
-            f"Calibration config not found: {config_path}. "
-            f"Create {calibration_name}.yaml under {config_path.parent}."
-        )
+# def load_calibration_config(run_name: str, calibration_name: str) -> tuple[CalibrationConfig, Path]:
+#     paths = load_project_paths()
+#     config_path = paths.experiments_dir / run_name / f"{calibration_name}.yaml"
+#     if not config_path.exists():
+#         raise FileNotFoundError(
+#             f"Calibration config not found: {config_path}. "
+#             f"Create {calibration_name}.yaml under {config_path.parent}."
+#         )
 
-    with open(config_path, "r", encoding="utf-8") as handle:
-        payload = yaml.safe_load(handle) or {}
-    return build_calibration_config(payload), config_path
+#     with open(config_path, "r", encoding="utf-8") as handle:
+#         payload = yaml.safe_load(handle) or {}
+#     return build_calibration_config(payload), config_path
 
 
 def _build_estimator(experiment_cfg: ExperimentConfig):
@@ -130,26 +130,27 @@ def train_and_save_ovr_models_chunks(run_name: str, experiment_name: str):
         feature_names=feature_names,
         mil_mode=False,
         mil_config=None,
-        batch_size=64,
-        epochs=10,
+        batch_size=experiment_cfg.training.batch_size,
+        epochs=experiment_cfg.training.epochs,
+        scope=experiment_cfg.training.scope,
     )
 
-    # stem = _artifact_stem(experiment_cfg)
-    # if val_idx is not None:
-    #     X_val = X[val_idx]
-    #     probas = predict_proba_dual_one_vs_rest(artifacts, X_val)
-    #     preds = predict_dual_one_vs_rest(artifacts, X_val)
-    #     np.save(experiment_dir / f"{stem}_val_probas.npy", probas)
-    #     np.save(experiment_dir / f"{stem}_val_preds.npy", preds)
-    #     np.save(experiment_dir / "val_indices.npy", np.asarray(val_idx))
+    stem = _artifact_stem(experiment_cfg)
+    if val_idx is not None:
+        X_val = X[val_idx]
+        probas = predict_proba_dual_one_vs_rest(artifacts, X_val)
+        preds = predict_dual_one_vs_rest(artifacts, X_val)
+        np.save(experiment_dir / f"{stem}_val_probas.npy", probas)
+        np.save(experiment_dir / f"{stem}_val_preds.npy", preds)
+        np.save(experiment_dir / "val_indices.npy", np.asarray(val_idx))
 
-    # joblib.dump(artifacts, experiment_dir / f"{stem}_ovr.joblib")
-    # with open(experiment_dir / "resolved_config.yaml", "w", encoding="utf-8") as handle:
-    #     yaml.safe_dump(experiment_cfg.to_dict(), handle, sort_keys=False)
-    # with open(experiment_dir / "config_source.txt", "w", encoding="utf-8") as handle:
-    #     handle.write(str(config_path.resolve()))
-    # with open(experiment_dir / "run_source.txt", "w", encoding="utf-8") as handle:
-    #     handle.write(str(run_path.resolve()))
+    joblib.dump(artifacts, experiment_dir / f"{stem}_ovr.joblib")
+    with open(experiment_dir / "resolved_config.yaml", "w", encoding="utf-8") as handle:
+        yaml.safe_dump(experiment_cfg.to_dict(), handle, sort_keys=False)
+    with open(experiment_dir / "config_source.txt", "w", encoding="utf-8") as handle:
+        handle.write(str(config_path.resolve()))
+    with open(experiment_dir / "run_source.txt", "w", encoding="utf-8") as handle:
+        handle.write(str(run_path.resolve()))
 
 
 def calibrate_and_save_ovr_models_chunks(

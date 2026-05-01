@@ -1,9 +1,12 @@
 
 # Spectral gating config dataclass
+from pathlib import Path
+import yaml
 from typing import Any, Literal
 from dataclasses import asdict, dataclass, field
 
 from birdclef_2026_ml.constants import SAMPLE_RATE
+from birdclef_2026_ml.paths import load_project_paths
 
 StatName = Literal["mean", "std", "min", "max", "skew", "kurtosis"]
 
@@ -106,11 +109,12 @@ class PipelineConfig:
     pooling: PoolingConfig = field(default_factory=PoolingConfig)
     chunk: ChunkConfig = field(default_factory=ChunkConfig)
     mil: MILConfig = field(default_factory=MILConfig)
+    mil_mode: bool = False
 
 
 @dataclass(frozen=True)
 class ModelConfig:
-    type: Literal["SGDClassifier", "LogisticRegression"] = "SGDClassifier"
+    type: Literal["SGDClassifier"] = "SGDClassifier"
     params: dict[str, Any] = field(default_factory=lambda: {
         "loss": "log_loss",
         "penalty": "elasticnet",
@@ -133,8 +137,9 @@ class ModelConfig:
 @dataclass(frozen=True)
 class TrainingConfig:
     batch_size: int = 128
-    epochs: int = 3
-    train_val_split: bool = False
+    epochs: int = 5
+    train_val_split: bool = True
+    scope: bool = False
 
     def __post_init__(self):
         if self.batch_size <= 0:
@@ -150,14 +155,6 @@ class ExperimentConfig:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
-
-
-def build_experiment_config(payload: dict[str, Any] | None = None) -> ExperimentConfig:
-    data = payload or {}
-    return ExperimentConfig(
-        model=ModelConfig(**data.get("model", {})),
-        training=TrainingConfig(**data.get("training", {})),
-    )
 
 
 @dataclass(frozen=True)
@@ -177,6 +174,25 @@ class CalibrationConfig:
             raise TypeError("calibration.params must be a mapping")
 
 
+def build_pipeline_config(payload: dict[str, Any] | None = None) -> PipelineConfig:
+    data = payload or {}
+    return PipelineConfig(
+        mil_mode=data.get("mil_mode", False),
+        feature=FeatureConfig(**data.get("feature", {})),
+        pooling=PoolingConfig(**data.get("pooling", {})),
+        chunk=ChunkConfig(**data.get("chunk", {})),
+        mil=MILConfig(**data.get("mil", {}))
+    )
+
+
+def build_experiment_config(payload: dict[str, Any] | None = None) -> ExperimentConfig:
+    data = payload or {}
+    return ExperimentConfig(
+        model=ModelConfig(**data.get("model", {})),
+        training=TrainingConfig(**data.get("training", {})),
+    )
+
+
 def build_calibration_config(payload: dict[str, Any] | None = None) -> CalibrationConfig:
     data = payload or {}
     calibration_payload = data.get("calibration", data)
@@ -184,3 +200,41 @@ def build_calibration_config(payload: dict[str, Any] | None = None) -> Calibrati
         type=calibration_payload.get("type", "CalibratedClassifierCV"),
         params=calibration_payload.get("params", {"method": "sigmoid"}),
     )
+
+
+def load_pipeline_config(run_name: str) -> PipelineConfig:
+    paths = load_project_paths()
+    config_path = paths.experiment_pipeline_path(run_name)
+
+    with open(config_path, "r", encoding="utf-8") as handle:
+        data = yaml.safe_load(handle) or {}
+
+    return build_pipeline_config(data)
+
+
+def load_experiment_config(run_name: str, experiment_name: str) -> tuple[ExperimentConfig, Path]:
+    paths = load_project_paths()
+    config_path = paths.experiment_config_path(run_name, experiment_name)
+    if not config_path.exists():
+        raise FileNotFoundError(
+            f"Experiment config not found: {config_path}. "
+            f"Create {experiment_name}.yaml under {config_path.parent}."
+        )
+
+    with open(config_path, "r", encoding="utf-8") as handle:
+        payload = yaml.safe_load(handle) or {}
+    return build_experiment_config(payload), config_path
+
+
+def load_calibration_config(run_name: str, calibration_name: str) -> tuple[CalibrationConfig, Path]:
+    paths = load_project_paths()
+    config_path = paths.experiments_dir / run_name / f"{calibration_name}.yaml"
+    if not config_path.exists():
+        raise FileNotFoundError(
+            f"Calibration config not found: {config_path}. "
+            f"Create {calibration_name}.yaml under {config_path.parent}."
+        )
+
+    with open(config_path, "r", encoding="utf-8") as handle:
+        payload = yaml.safe_load(handle) or {}
+    return build_calibration_config(payload), config_path

@@ -2,7 +2,7 @@ from birdclef_2026_ml.models.artifacts import (
     ThresholdTunedDualOneVsRestArtifacts,
     ThresholdTunedOneVsRestArtifacts,
 )
-from birdclef_2026_ml.models.mil_learning import (
+from birdclef_2026_ml.models.mil import (
     MILFeatureBags,
     build_mil_bags_from_df,
     build_mil_feature_bags,
@@ -10,7 +10,7 @@ from birdclef_2026_ml.models.mil_learning import (
     pool_instance_probabilities,
     predict_mil_proba,
 )
-from birdclef_2026_ml.models.one_vs_rest_models import (
+from birdclef_2026_ml.models.one_vs_rest import (
     DualOneVsRestArtifacts,
     OneVsRestArtifacts,
     predict_dual_one_vs_rest,
