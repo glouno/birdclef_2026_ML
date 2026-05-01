@@ -12,15 +12,14 @@ from birdclef_2026_ml.configs import (
     load_pipeline_config
 )
 from birdclef_2026_ml.feature_engineering import (
-    build_profile,
-    save_features_from_audio_dir,
-    save_pooled_features_from_mel_dir,
-    save_profiles,
+    build_profiles,
+    extract_save_mel_spectograms,
 )
 from birdclef_2026_ml.paths import ProjectPaths, load_project_paths
 from birdclef_2026_ml.processing.audio_utils import load_config
 from birdclef_2026_ml.processing.feature_dataset_builder import (
-    build_memmap_from_chunks,
+    build_feature_memmap_artifacts,
+    build_soundscape_feature_memmap_artifacts,
     reduce_feature_memmap,
 )
 from birdclef_2026_ml.processing.memmap_dataset import load_memmap_dataset
@@ -104,8 +103,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser_build_feature_matrices.add_argument("--audio-stage", type=str, default="clean", choices=STAGE_CHOICES)
     parser_build_feature_matrices.add_argument("--feature-kind", type=str, default="mel", choices=FEATURE_KIND_CHOICES)
     parser_build_feature_matrices.add_argument("--run-name", type=str, required=True)
-    parser_build_feature_matrices.add_argument("--profiles-path", type=str, default=None)
-    parser_build_feature_matrices.add_argument("--species-ids-path", type=str, default=None)
+    parser_build_feature_matrices.add_argument("--soundscapes", action="store_true")
 
     parser_reduce_feature_matrices = subparsers.add_parser(
         "reduce-feature-matrices",
@@ -113,12 +111,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser_reduce_feature_matrices.add_argument("--run-name", type=str, required=True)
     parser_reduce_feature_matrices.add_argument("--target-mel-bins", type=int, default=32)
+    parser_reduce_feature_matrices.add_argument("--soundscapes", action="store_true")
 
     parser_profiles = subparsers.add_parser(
         "build-profiles",
         help="Build one species profile per label from one run.",
     )
-    parser_profiles.add_argument("--run-name", type=str, required=True)
+    # parser_profiles.add_argument("--run-name", type=str, required=True)
+    parser_profiles.add_argument("--input-kind", type=str, default="mel", choices=("mel",))
+    parser_profiles.add_argument("--output-kind", type=str, default="pooled", choices=("pooled",))
     parser_profiles.add_argument(
         "--pooling-method",
         type=str,
@@ -143,7 +144,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     parser_mel = subparsers.add_parser(
-        "extract-all-features",
+        "extract-mel-spectograms",
         help="Extract raw log-mel spectrograms for one dataset.",
     )
     parser_mel.add_argument("--dataset", type=str, required=True, choices=DATASET_CHOICES)
@@ -151,9 +152,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # parser_pool_mel = subparsers.add_parser(
     #     "pool-mel-features",
-    #     help="Pool precomputed mel spectrograms into tabular features.",
+    #     help="Pool precomputed mel spectrograms into global pooled median (required for profiles calculation).",
     # )
-    # parser_pool_mel.add_argument("--dataset", type=str, required=True, choices=DATASET_CHOICES)
+    # # parser_pool_mel.add_argument("--dataset", type=str, required=True, choices=DATASET_CHOICES)
     # parser_pool_mel.add_argument("--input-kind", type=str, default="mel", choices=("mel",))
     # parser_pool_mel.add_argument("--output-kind", type=str, default="pooled", choices=("pooled",))
 
@@ -179,17 +180,22 @@ def _run_preprocess_datasets_for_models(paths: ProjectPaths):
 
 
 def _run_build_profiles(args, paths: ProjectPaths):
-    dataset = load_memmap_dataset(args.run_name)
-    species_ids, profiles = build_profile(
-        dataset.X,
-        dataset.y,
-        dataset.feature_names,
-        pooling_method=args.pooling_method,
-        trim_ratio=args.trim_ratio,
+    df = pd.read_parquet(paths.train_processed)
+    species_ids, profiles = build_profiles(
+        df=df,
+        input_mel_dir=_feature_dir(paths, "train", args.input_kind),
+        output_path=_feature_dir(paths, "train", args.output_kind),
     )
 
-    paths.profiles_dir.mkdir(parents=True, exist_ok=True)
-    profiles_path, species_ids_path = save_profiles(paths.profiles_dir, species_ids, profiles)
+    output_dir = paths.profiles_dir
+    output_dir.mkdir(parents=True, exist_ok=True)
+    profiles_path = output_dir / "species_profiles.npy"
+    species_ids_path = output_dir / "species_profile_ids.npy"
+    np.save(profiles_path, profiles)
+    np.save(species_ids_path, species_ids)
+
+    # paths.profiles_dir.mkdir(parents=True, exist_ok=True)
+    # profiles_path, species_ids_path = save_profiles(paths.profiles_dir, species_ids, profiles)
     print(f"Profiles saved to: {profiles_path}")
     print(f"Species ids saved to: {species_ids_path}")
 
@@ -207,14 +213,15 @@ def _run_spectral_gating(args, paths: ProjectPaths):
         input_root=_audio_dir(paths, args.dataset, args.input_stage),
         output_root=_audio_dir(paths, args.dataset, args.output_stage),
         filename_col=args.filename_col,
+        **args,
     )
 
 
-def _run_extract_all_features(args, paths: ProjectPaths):
+def _run_extract_mel_spectograms(args, paths: ProjectPaths):
     pipeline_cfg = PipelineConfig()
     df = pd.read_parquet(_dataset_frame(paths, args.dataset))
 
-    save_features_from_audio_dir(
+    extract_save_mel_spectograms(
         df=df,
         input_path=_audio_dir(paths, args.dataset, args.audio_stage),
         config_path=paths.feature_config,
@@ -240,22 +247,34 @@ def _run_build_feature_matrices(args, paths: ProjectPaths):
     pipeline_cfg = load_pipeline_config(args.run_name)
     # Compose the path to the pipeline config YAML
 
-    build_memmap_from_chunks(
+    if args.dataset == "soundscapes":
+        build_soundscape_feature_memmap_artifacts(
+            df=df,
+            pipeline_cfg=pipeline_cfg,
+            pathroot=_audio_dir(paths, args.dataset, args.audio_stage),
+            features_pathroot=_feature_dir(paths, args.dataset, args.feature_kind),
+            out_instances_path=paths.run_data_dir(args.run_name),
+            profiles_path=paths.profiles_dir / "species_profiles.npy",
+            species_ids_path=paths.profiles_dir / "species_profile_ids.npy",
+        )
+        return
+
+    build_feature_memmap_artifacts(
         df=df,
         pipeline_cfg=pipeline_cfg,
         pathroot=_audio_dir(paths, args.dataset, args.audio_stage),
         filename_col="filename",
         features_pathroot=_feature_dir(paths, args.dataset, args.feature_kind),
         out_instances_path=paths.run_data_dir(args.run_name),
-        soundscapes=args.dataset == "soundscapes",
         profiles_path=paths.profiles_dir / "species_profiles.npy",
-        species_ids_path=paths.profiles_dir / "species_profile_ids.npy"
+        species_ids_path=paths.profiles_dir / "species_profile_ids.npy",
     )
 
 
 def _run_reduce_feature_matrices(args, paths: ProjectPaths):
     run_path = paths.run_data_dir(args.run_name)
-    X_reduced, reduced_names = reduce_feature_memmap(run_path=run_path, target_mel_bins=args.target_mel_bins)
+    X_reduced, reduced_names = reduce_feature_memmap(
+        run_path=run_path, target_mel_bins=args.target_mel_bins, soundscapes=args.soundscapes)
     print(f"Reduced matrix saved in: {run_path}")
     print(f"Reduced shape: {X_reduced.shape}")
     print(f"Reduced feature count: {len(reduced_names)}")
@@ -307,15 +326,15 @@ def main(argv=None) -> int:
         _run_spectral_gating(args, paths)
         print("Spectral gating completed.")
         return 0
+    # if args.command == "build-profiles":
+    #     _run_build_profiles(args, paths)
+    #     return 0
+    if args.command == "extract-mel-spectograms":
+        _run_extract_mel_spectograms(args, paths)
+        return 0
     if args.command == "build-profiles":
         _run_build_profiles(args, paths)
         return 0
-    if args.command == "extract-all-features":
-        _run_extract_all_features(args, paths)
-        return 0
-    # if args.command == "pool-mel-features":
-    #     _run_pool_mel_features(args, paths)
-    #     return 0
     if args.command == "train-ovr-models-chunks":
         _run_train_ovr_models_chunks(args)
         return 0

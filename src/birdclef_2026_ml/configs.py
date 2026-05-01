@@ -91,13 +91,13 @@ class ChunkConfig:
 
 @dataclass(frozen=False)
 class MILConfig:
-    window_size_s: float = 1.0  # seconds
+    chunk_size_s: float = 1.0  # seconds
     step_size_s: float = 0.5    # seconds
     pooling: Literal["max", "mean", "logsumexp"] = "max"
 
     def __post_init__(self):
-        if self.window_size_s <= 0 or self.step_size_s <= 0:
-            raise ValueError("window_size_s and step_size_s must be > 0")
+        if self.chunk_size_s <= 0 or self.step_size_s <= 0:
+            raise ValueError("chunk_size_s and step_size_s must be > 0")
         if self.pooling not in ("max", "mean", "logsumexp"):
             raise ValueError("Invalid pooling method for MILConfig")
 
@@ -140,12 +140,19 @@ class TrainingConfig:
     epochs: int = 5
     train_val_split: bool = True
     scope: bool = False
+    early_stopping: bool = False
+    n_iter_no_change: int = 5
+    tol: float = 1e-4
 
     def __post_init__(self):
         if self.batch_size <= 0:
             raise ValueError("training.batch_size must be > 0")
         if self.epochs <= 0:
             raise ValueError("training.epochs must be > 0")
+        if self.n_iter_no_change <= 0:
+            raise ValueError("training.n_iter_no_change must be > 0")
+        if self.tol < 0:
+            raise ValueError("training.tol must be >= 0")
 
 
 @dataclass(frozen=True)

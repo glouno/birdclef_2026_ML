@@ -87,6 +87,9 @@ class ProjectPaths:
     def run_data_dir(self, run_name: str) -> Path:
         return self.runs_dir / run_name / "data"
 
+    # def run_profiles_dir(self, run_name: str) -> Path:
+    #     return self.runs_dir / run_name / "profiles"
+
     def experiment_pipeline_path(self, run_name: str) -> Path:
         return self.experiments_dir / run_name / "pipeline.yaml"
 

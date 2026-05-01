@@ -19,7 +19,7 @@ from birdclef_2026_ml.feature_engineering.pooling import pool_feature_dict, pool
 from birdclef_2026_ml.feature_engineering.chunking import get_sliding_window_intervals
 
 
-def save_features_from_audio_dir(
+def extract_save_mel_spectograms(
     df,
     input_path: Path,
     pipeline_cfg: PipelineConfig,
@@ -51,41 +51,6 @@ def save_features_from_audio_dir(
         del y
         del mel_spectrogram_db
         gc.collect()
-
-    return total
-
-
-def save_pooled_features_from_mel_dir(
-    df,
-    input_mel_dir: Path,
-    output_path: Path,
-    pipeline_cfg: PipelineConfig,
-    filename_col: str = "filename",
-) -> int:
-    """
-    Load precomputed mel spectrograms from .npy, derive full feature set, pool, save per file.
-    """
-    output_path.mkdir(parents=True, exist_ok=True)
-
-    filenames = df[filename_col].unique()
-    total = len(filenames)
-
-    for i, filename in enumerate(filenames, start=1):
-        mel_path = (input_mel_dir / filename).with_suffix(".npy")
-        feature_matrix, feature_names = build_feature_vector(
-            y=None,
-            pipeline_cfg=pipeline_cfg,
-            mel_spectrogram_npy_path=mel_path,
-        )
-
-        out_path = (output_path / filename).with_suffix(".npz")
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        np.savez_compressed(
-            out_path,
-            feature_matrix=np.asarray(feature_matrix, dtype=np.float32),
-            feature_names=np.asarray(feature_names, dtype=object),
-        )
-        print(f"[{i}/{total}] saved pooled features for {filename}")
 
     return total
 

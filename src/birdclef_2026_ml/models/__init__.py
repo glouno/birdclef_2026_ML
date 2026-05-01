@@ -2,14 +2,14 @@ from birdclef_2026_ml.models.artifacts import (
     ThresholdTunedDualOneVsRestArtifacts,
     ThresholdTunedOneVsRestArtifacts,
 )
-from birdclef_2026_ml.models.mil import (
-    MILFeatureBags,
-    build_mil_bags_from_df,
-    build_mil_feature_bags,
-    mil_multiclass_log_loss,
-    pool_instance_probabilities,
-    predict_mil_proba,
-)
+# from birdclef_2026_ml.models.mil import (
+#     MILFeatureBags,
+#     build_mil_bags_from_df,
+#     build_mil_feature_bags,
+#     mil_multiclass_log_loss,
+#     pool_instance_probabilities,
+#     predict_mil_proba,
+# )
 from birdclef_2026_ml.models.one_vs_rest import (
     DualOneVsRestArtifacts,
     OneVsRestArtifacts,
@@ -28,16 +28,16 @@ from birdclef_2026_ml.models.threshold_tuning import (
 
 __all__ = [
     "DualOneVsRestArtifacts",
-    "MILFeatureBags",
+    # "MILFeatureBags",
     "OneVsRestArtifacts",
     "ThresholdTunedDualOneVsRestArtifacts",
     "ThresholdTunedOneVsRestArtifacts",
-    "build_mil_bags_from_df",
-    "build_mil_feature_bags",
-    "mil_multiclass_log_loss",
-    "pool_instance_probabilities",
-    "predict_dual_one_vs_rest",
-    "predict_mil_proba",
+    # "build_mil_bags_from_df",
+    # "build_mil_feature_bags",
+    # "mil_multiclass_log_loss",
+    # "pool_instance_probabilities",
+    # "predict_dual_one_vs_rest",
+    # "predict_mil_proba",
     "predict_one_vs_rest",
     "predict_proba_dual_one_vs_rest",
     "predict_proba_one_vs_rest",

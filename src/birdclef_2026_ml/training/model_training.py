@@ -70,7 +70,11 @@ def _build_estimator(experiment_cfg: ExperimentConfig):
     if estimator_cls is None:
         supported = ", ".join(sorted(ESTIMATOR_REGISTRY))
         raise ValueError(f"Unsupported model.type={experiment_cfg.model.type}. Supported: {supported}")
-    return estimator_cls(**experiment_cfg.model.params)
+    params = dict(experiment_cfg.model.params)
+    params.pop("early_stopping", None)
+    params.pop("n_iter_no_change", None)
+    params.pop("validation_fraction", None)
+    return estimator_cls(**params)
 
 
 def _artifact_stem(experiment_cfg: ExperimentConfig) -> str:
@@ -91,14 +95,14 @@ def _build_calibration_params(calibration_cfg: CalibrationConfig) -> dict[str, o
     return params
 
 
-def train_and_save_ovr_models_chunks(run_name: str, experiment_name: str):
+def train_and_save_ovr_models_chunks(run_name: str, experiment_name: str, reduced: bool = True):
     paths = load_project_paths()
     run_path = paths.run_dir(run_name)
     experiment_cfg, config_path = load_experiment_config(run_name, experiment_name)
     experiment_dir = paths.experiment_dir(run_name, experiment_name)
     experiment_dir.mkdir(parents=True, exist_ok=True)
 
-    dataset = load_memmap_dataset(run_name)
+    dataset = load_memmap_dataset(run_name, reduced=reduced)
     filenames = dataset.filenames
     feature_names = dataset.feature_names
     X = dataset.X
@@ -117,6 +121,11 @@ def train_and_save_ovr_models_chunks(run_name: str, experiment_name: str):
         y_train = y[train_idx]
 
     estimator = _build_estimator(experiment_cfg)
+    x_val = None
+    y_val = None
+    if val_idx is not None:
+        x_val = X[val_idx]
+        y_val = y[val_idx]
 
     artifacts = train_dual_one_vs_rest_models(
         X_train,
@@ -132,14 +141,19 @@ def train_and_save_ovr_models_chunks(run_name: str, experiment_name: str):
         mil_config=None,
         batch_size=experiment_cfg.training.batch_size,
         epochs=experiment_cfg.training.epochs,
+        early_stopping=experiment_cfg.training.early_stopping,
+        n_iter_no_change=experiment_cfg.training.n_iter_no_change,
+        tol=experiment_cfg.training.tol,
+        x_val=x_val,
+        y_class_name_val=None if y_val is None else y_val[:, 0],
+        y_primary_label_val=None if y_val is None else y_val[:, 1],
         scope=experiment_cfg.training.scope,
     )
 
     stem = _artifact_stem(experiment_cfg)
     if val_idx is not None:
-        X_val = X[val_idx]
-        probas = predict_proba_dual_one_vs_rest(artifacts, X_val)
-        preds = predict_dual_one_vs_rest(artifacts, X_val)
+        probas = predict_proba_dual_one_vs_rest(artifacts, x_val)
+        preds = predict_dual_one_vs_rest(artifacts, x_val)
         np.save(experiment_dir / f"{stem}_val_probas.npy", probas)
         np.save(experiment_dir / f"{stem}_val_preds.npy", preds)
         np.save(experiment_dir / "val_indices.npy", np.asarray(val_idx))

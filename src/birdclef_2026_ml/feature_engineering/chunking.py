@@ -1,5 +1,6 @@
 
 import numpy as np
+from birdclef_2026_ml.configs import ChunkConfig, MILConfig
 
 
 def feature_frame_rate_hz(sr, hop_length) -> float:
@@ -49,33 +50,32 @@ def get_sliding_window_intervals(
     return windows
 
 
-# TODO: overestimates by 1 number of chunks for some audios
-def count_nb_chunks(df, chunk_cfg, sr, hop_length):
-    C = chunk_cfg.chunk_size_s
-    S = chunk_cfg.step_size_s
-
+def get_duration_chunk_intervals(
+    duration_s: float,
+    chunk_cfg: ChunkConfig | MILConfig,
+    sr: int,
+    hop_length: int,
+) -> list[tuple[int, int]]:
     frame_rate_hz = feature_frame_rate_hz(sr, hop_length)
-    # N = np.ceil(df["duration"] * frame_rate_hz).astype(int)
-    # W = int(np.ceil(C * frame_rate_hz))
-    # H = int(np.ceil(S * frame_rate_hz))
+    n_frames = int(1 + np.floor(duration_s * sr / hop_length))
+    return get_sliding_window_intervals(
+        n_frames=n_frames,
+        window_size_s=chunk_cfg.chunk_size_s,
+        step_size_s=chunk_cfg.step_size_s,
+        frame_rate_hz=frame_rate_hz,
+    )
 
-    # base = np.floor((N - W) / H).astype(int) + 1
-    # base = np.maximum(1, base)  # handles short audio
 
-    # last_end = (base - 1) * H + W
-    # needs_extra = last_end < N
-
-    # chunks = base + needs_extra.astype(int)
-    # return np.sum(chunks)
+# TODO: overestimates by 1 number of chunks for some audios
+# When counting with mil_mode, assumption that ChunkConfig.chunk_size_s = ChunkConfig.step_size_s
+def count_nb_chunks(
+    df,
+    chunk_cfg: ChunkConfig | MILConfig,
+    sr,
+    hop_length
+):
     total = 0
     for dur in df["duration"].values:
-        # n_frames = int(np.ceil(dur * frame_rate_hz))
-        n_frames = 1 + np.floor(dur * sr / hop_length)
-        intervals = get_sliding_window_intervals(
-            n_frames,
-            chunk_cfg.chunk_size_s,
-            chunk_cfg.step_size_s,
-            frame_rate_hz,
-        )
+        intervals = get_duration_chunk_intervals(dur, chunk_cfg, sr, hop_length)
         total += len(intervals)
     return total

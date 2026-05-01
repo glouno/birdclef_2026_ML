@@ -17,7 +17,7 @@ from sklearn.preprocessing import MultiLabelBinarizer, label_binarize
 
 from birdclef_2026_ml.feature_engineering import build_feature_vector, build_mil_feature_matrix
 from birdclef_2026_ml.configs import PipelineConfig
-from birdclef_2026_ml.models.one_vs_rest_models import OneVsRestArtifacts, predict_proba_one_vs_rest
+from birdclef_2026_ml.models.one_vs_rest import OneVsRestArtifacts, predict_proba_one_vs_rest
 from birdclef_2026_ml.paths import load_project_paths
 from birdclef_2026_ml.processing.audio_utils import get_path, load_audio
 
