@@ -38,7 +38,10 @@ PROJECT_ROOT=/abs/path/to/repo uv run python -m birdclef_2026_ml ...
 5. Define the run configuration (`FeatureConfig`, `ChunkConfig`, `MILConfig`) and extract all features, aggregating them per time chunk.
 6. [Optional] Reduce the number of features, e.g., by reducing the dimensionality of the mel-spectrogram from 128 to 32 mels.
 7. Train an `SGDClassifier` model to predict both `class_name` and `primary_label` (hierarchical approach).
-8.
+8. Run OVR inference (probabilities will be used afterwards)
+<!-- 8. Train a second-stage OVR model on clean-audio MIL bag features to refine `primary_label`.
+9. Run soundscape OOF post-processing to calibrate probabilities, tune thresholds, and save multilabel predictions.
+10. Run OVR inference to generate predictions. -->
 
 ### Commands
 
@@ -178,7 +181,7 @@ uv run python -m birdclef_2026_ml train-ovr-models-chunks \
 Outputs are saved in:
 
 - `artifacts/models/runs/<run-name>/experiments/<experiment-name>/`
-- Includes the trained model, validation predictions, and a resolved config copy
+- Includes the trained model, optional `val_indices.npy`, and a resolved config copy
 
 The training configuration supports custom batch early stopping in the OVR loop:
 
@@ -187,6 +190,188 @@ The training configuration supports custom batch early stopping in the OVR loop:
 - `training.tol`: minimum val log-loss improvement to reset patience
 
 When `training.early_stopping: true`, ensure `training.train_val_split: true` or provide validation data through the calling code.
+
+##### 8. Train MIL Second Stage on Clean-Audio Bags
+
+Train command:
+
+```bash
+uv run python -m birdclef_2026_ml train-mil-second-stage-clean \
+  --run-name <run-name> \
+  --experiment sgd_baseline
+```
+
+Or run the two steps separately:
+
+```bash
+uv run python -m birdclef_2026_ml build-mil-second-stage-clean-data \
+  --run-name <run-name> \
+  --experiment sgd_baseline
+```
+
+Add `--soundscapes` to use soundscape MIL matrices (bag ids come from `bags_meta_soundscape.npy`).
+
+```bash
+uv run python -m birdclef_2026_ml train-mil-second-stage-clean-model \
+  --run-name <run-name> \
+  --experiment sgd_baseline
+```
+
+To run the trained clean-audio second-stage model on soundscape bag features:
+
+```bash
+uv run python -m birdclef_2026_ml run-mil-second-stage-clean-soundscape \
+  --run-name <run-name> \
+  --experiment sgd_baseline
+```
+
+To warm-start the clean-audio second-stage models and score soundscape OOF splits:
+
+```bash
+uv run python -m birdclef_2026_ml run-mil-second-stage-clean-soundscape-oof \
+  --run-name <run-name> \
+  --experiment sgd_baseline
+```
+
+To train a soundscape OOF model using MIL soundscape probabilities + context features:
+
+```bash
+uv run python -m birdclef_2026_ml run-soundscape-mil-context-oof \
+  --run-name <run-name> \
+  --experiment sgd_baseline
+```
+
+This uses P(bag), per-class bag aggregation features, and context features. Classes with no
+positives in a fold default back to P(bag).
+
+This stage:
+
+- loads stage-1 `class_name` and `primary_label` probabilities from the experiment inference folder
+- builds per-primary-label bag features using summary statistics of `P(primary_label)` and its parent `P(class_name)`
+- trains a one-vs-rest second-stage model on train bags and evaluates on `val_indices.npy`
+
+Outputs are saved in:
+
+- `artifacts/models/runs/<run-name>/experiments/<experiment-name>/clean_audio/`
+- `train_bag_features_primary.npy`, `val_bag_features_primary.npy` (shape: `n_primary x n_bags x n_features`)
+- `train_bag_features_primary_soundscape.npy` (when `--soundscapes` is used)
+- `train_bag_labels.npy`, `val_bag_labels.npy`
+- `train_bag_labels_soundscape.npy`, `val_bag_labels_soundscape.npy` (when `--soundscapes` is used)
+- `train_bag_ids.npy`, `val_bag_ids.npy`
+- `train_bag_ids_soundscape.npy`, `val_bag_ids_soundscape.npy` (when `--soundscapes` is used)
+- `val_proba.npy`
+- `<model-stem>_mil_second_stage_primary.joblib`
+- `<model-stem>_mil_second_stage_primary_soundscape_proba.npy`
+- `<model-stem>_mil_second_stage_primary_soundscape_oof.npy`
+- `<model-stem>_mil_second_stage_primary_soundscape_context_oof.npy`
+
+---
+
+## Run soundscape OOF post-processing
+
+This step loads trained `DualOneVsRestArtifacts`, predicts `class_name` and
+`primary_label` probabilities in log space on soundscapes, combines both heads,
+fits per-class probability calibrators with grouped out-of-fold splits,
+tunes per-class multilabel thresholds for macro F1, then saves OOF and final
+predictions under the experiment soundscape directory.
+
+```bash
+uv run python -m birdclef_2026_ml run-soundscape-oof \
+  --run-name <run-name> \
+  --experiment sgd_baseline \
+  --calibration calibration_sigmoid
+```
+
+Optional flags:
+
+- `--model-filename <file.joblib>` to use non-default saved OVR artifact
+- `--n-splits <int>` to control grouped OOF fold count
+- `--random-state <int>` to control OOF split seed
+- `--max-rounds <int>` to control threshold tuning passes
+- `--full` to use full (non-reduced) soundscape matrices
+
+Outputs are saved in:
+
+- `artifacts/models/runs/<run-name>/experiments/<experiment-name>/soundscapes/`
+- `oof/class_name_combined_log_proba.npy`
+- `oof/class_name_calibrated_proba.npy`
+- `oof/class_name_thresholds.npy`
+- `oof/class_name_predictions.npy`
+- `oof/primary_label_combined_log_proba.npy`
+- `oof/primary_label_calibrated_proba.npy`
+- `oof/primary_label_thresholds.npy`
+- `oof/primary_label_predictions.npy`
+- `final/class_name_combined_log_proba.npy`
+- `final/class_name_calibrated_proba.npy`
+- `final/class_name_thresholds.npy`
+- `final/class_name_predictions.npy`
+- `final/primary_label_combined_log_proba.npy`
+- `final/primary_label_calibrated_proba.npy`
+- `final/primary_label_thresholds.npy`
+- `final/primary_label_predictions.npy`
+- `fold_<k>_train_indices.npy`, `fold_<k>_val_indices.npy`
+- `metrics.yaml`
+- `<model-stem>_soundscape_oof.joblib`
+
+## Run OVR inference
+
+Inference loads a saved `.joblib` artifact and writes predictions under the
+experiment's `inference` subfolder.
+
+```bash
+uv run python -m birdclef_2026_ml run-ovr-inference \
+  --run-name <run-name> \
+  --experiment sgd_baseline \
+  --soundscapes
+```
+
+Optional flags:
+
+- `--model-filename <file.joblib>` to infer from a specific artifact
+- `--full` to use full (non-reduced) feature matrices
+
+Outputs are saved in:
+
+- `artifacts/models/runs/<run-name>/experiments/<experiment-name>/inference/`
+- `<model-stem>_class_name_probas.dat`, `<model-stem>_primary_label_probas.dat`
+- `<model-stem>_class_name_probas_shape.npy`, `<model-stem>_class_name_probas_dtype.npy`
+- `<model-stem>_primary_label_probas_shape.npy`, `<model-stem>_primary_label_probas_dtype.npy`
+- `<model-stem>_class_name_preds.npy`, `<model-stem>_primary_label_preds.npy`
+
+When `--soundscapes` is used, outputs are suffixed with `_soundscape` before the
+`_class_name_*` or `_primary_label_*` suffixes.
+
+## Run MIL inference
+
+MIL inference aggregates window-level OVR probabilities into bag-level
+probabilities and predictions.
+
+```bash
+uv run python -m birdclef_2026_ml run-mil-inference \
+  --run-name <run-name> \
+  --experiment sgd_baseline \
+  --aggregation mean
+```
+
+Optional flags:
+
+- `--model-filename <file.joblib>` to use non-default saved OVR artifact
+- `--soundscapes` to aggregate soundscape windows
+- `--full` to use full (non-reduced) feature matrices
+- `--val-idx-path <path.npy>` to remap validation indices to bag ids
+
+Outputs are saved in:
+
+- `artifacts/models/runs/<run-name>/experiments/<experiment-name>/inference/`
+- `<model-stem>_mil_<aggregation>_bag_ids.npy`
+- `<model-stem>_mil_<aggregation>_val_bag_ids.npy` (if `--val-idx-path` is provided)
+- `<model-stem>_mil_<aggregation>_val_bag_idx.npy` (if `--val-idx-path` is provided)
+- `<model-stem>_mil_<aggregation>_class_name_probas.npy`
+- `<model-stem>_mil_<aggregation>_primary_label_probas.npy`
+- `<model-stem>_mil_<aggregation>_class_name_preds.npy`
+- `<model-stem>_mil_<aggregation>_primary_label_preds.npy`
+- `<model-stem>_mil_<aggregation>_class_name_true.npy`
+- `<model-stem>_mil_<aggregation>_primary_label_true.npy`
 
 ---
 
