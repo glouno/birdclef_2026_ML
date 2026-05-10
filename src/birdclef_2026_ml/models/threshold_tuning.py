@@ -17,6 +17,128 @@ Array2D = np.ndarray
 ScoreFn = Callable[[Array1D, Array1D], float]
 
 
+def compute_priors_from_labels(y_class_name, y_primary_label, primary_to_class, n_labels=234):
+    y_class_name = np.asarray(y_class_name, dtype=int).reshape(-1)
+    y_primary_label = np.asarray(y_primary_label, dtype=int).reshape(-1)
+    primary_to_class = np.asarray(primary_to_class, dtype=int)
+
+    if y_primary_label.size and int(y_primary_label.max()) >= n_labels:
+        raise ValueError("y_primary_label contains label >= n_labels")
+    if primary_to_class.size < n_labels:
+        raise ValueError("primary_to_class must have at least n_labels entries")
+
+    n_classes = 0
+    if primary_to_class.size:
+        n_classes = int(primary_to_class.max()) + 1
+    if y_class_name.size:
+        n_classes = max(n_classes, int(y_class_name.max()) + 1)
+
+    if y_class_name.size:
+        class_counts = np.bincount(y_class_name, minlength=n_classes).astype(float)
+        class_priors = class_counts / float(y_class_name.size)
+    else:
+        class_priors = np.zeros(n_classes, dtype=float)
+
+    if y_primary_label.size:
+        primary_counts = np.bincount(y_primary_label, minlength=n_labels).astype(float)
+        primary_priors = primary_counts / float(y_primary_label.size)
+    else:
+        primary_counts = np.zeros(n_labels, dtype=float)
+        primary_priors = np.zeros(n_labels, dtype=float)
+
+    missing_mask = primary_counts == 0
+    if np.any(missing_mask):
+        class_ids = primary_to_class[:n_labels]
+        primary_priors[missing_mask] = class_priors[class_ids[missing_mask]]
+
+    return class_priors, primary_priors
+
+
+def compute_priors_from_multihot(y_class_name, y_primary_label, primary_to_class, n_labels=234):
+    y_class_name = np.asarray(y_class_name, dtype=float)
+    y_primary_label = np.asarray(y_primary_label, dtype=float)
+    primary_to_class = np.asarray(primary_to_class, dtype=int)
+
+    if y_class_name.ndim != 2:
+        raise ValueError("y_class_name must be 2D (n_samples, n_classes)")
+    if y_primary_label.ndim != 2:
+        raise ValueError("y_primary_label must be 2D (n_samples, n_labels)")
+    if y_primary_label.shape[1] != n_labels:
+        raise ValueError("y_primary_label must have n_labels columns")
+    if primary_to_class.size < n_labels:
+        raise ValueError("primary_to_class must have at least n_labels entries")
+
+    n_samples = y_class_name.shape[0]
+    if n_samples == 0:
+        class_priors = np.zeros(y_class_name.shape[1], dtype=float)
+    else:
+        class_priors = np.mean(y_class_name, axis=0).astype(float)
+
+    if y_primary_label.shape[0] == 0:
+        primary_counts = np.zeros(n_labels, dtype=float)
+        primary_priors = np.zeros(n_labels, dtype=float)
+    else:
+        primary_counts = np.sum(y_primary_label, axis=0).astype(float)
+        primary_priors = primary_counts / float(y_primary_label.shape[0])
+
+    missing_mask = primary_counts == 0
+    if np.any(missing_mask):
+        class_ids = primary_to_class[:n_labels]
+        primary_priors[missing_mask] = class_priors[class_ids[missing_mask]]
+
+    return class_priors, primary_priors
+
+
+# def compute_priors(y_class_name, y_primary_label, primary_to_class, n_labels=234):
+#     return compute_priors_from_labels(y_class_name, y_primary_label, primary_to_class, n_labels=n_labels)
+
+def _calc_shift(priors, k):
+    denom = priors + (1.0 - priors) * k
+    return np.divide(priors, denom, out=np.zeros_like(priors), where=denom != 0)
+
+
+def compute_priors_log_odds_from_labels(
+    y_class_name,
+    y_primary_label,
+    primary_to_class,
+    n_classes=234,
+    k: float = 1.0,
+):
+
+    class_priors, primary_priors = compute_priors_from_labels(
+        y_class_name, y_primary_label, primary_to_class, n_labels=n_classes)
+
+    return _calc_shift(class_priors, k), _calc_shift(primary_priors, k)
+
+
+def compute_priors_log_odds_from_multihot(
+    y_class_name,
+    y_primary_label,
+    primary_to_class,
+    n_classes=234,
+    k: float = 1.0,
+):
+    class_priors, primary_priors = compute_priors_from_multihot(
+        y_class_name, y_primary_label, primary_to_class, n_labels=n_classes)
+    return _calc_shift(class_priors, k), _calc_shift(primary_priors, k)
+
+
+# def compute_priors_log_odds(
+#     y_class_name,
+#     y_primary_label,
+#     primary_to_class,
+#     n_classes=234,
+#     k: float = 1.0,
+# ):
+#     return compute_priors_log_odds_from_labels(
+#         y_class_name,
+#         y_primary_label,
+#         primary_to_class,
+#         n_classes=n_classes,
+#         k=k,
+#     )
+
+
 def resolve_threshold_score_fn(score: str | ScoreFn) -> tuple[str, ScoreFn]:
     if callable(score):
         score_name = getattr(score, "__name__", "custom_score")

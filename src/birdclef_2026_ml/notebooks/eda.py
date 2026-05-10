@@ -65,10 +65,10 @@ def plot_audio_overview_on_axes(path, train_audio_dir, axes, n_mfcc=13):
         y_axis='hz',
         ax=axes[1],
         cmap='magma',
-        # vmin=db_vmin,
-        # vmax=db_vmax,
+        vmin=-80,
+        vmax=-10,
     )
-    axes[1].set_title('Spectrogram (dB)')
+    axes[1].set_title('Spectrogram (dB re 1)')
     fig1 = axes[1].figure
     fig1.colorbar(img1, ax=axes[1], format='%+2.0f dB')
 
@@ -79,10 +79,10 @@ def plot_audio_overview_on_axes(path, train_audio_dir, axes, n_mfcc=13):
         y_axis='mel',
         ax=axes[2],
         cmap='magma',
-        # vmin=db_vmin,
-        # vmax=db_vmax,
+        vmin=-80,
+        vmax=-10,
     )
-    axes[2].set_title('Mel Spectrogram (dB)')
+    axes[2].set_title('Mel Spectrogram (dB re 1)')
     axes[2].set_ylabel('mels')
     fig1.colorbar(img2, ax=axes[2], format='%+2.0f dB')
 
@@ -147,6 +147,7 @@ def plot_audio_overview_grid(
             axis.axis("off")
 
     plt.tight_layout()
+    return fig
 
 
 def plot_train_locations(df, hue_col=None, max_categories=20):
@@ -237,23 +238,32 @@ def plot_train_locations(df, hue_col=None, max_categories=20):
         edgecolor="crimson",
         linewidth=2,
         linestyle="--",
-        label="Recording location (soundscapes)",
+        # label="Recording location (soundscapes)",
     )
     ax.add_patch(bbox)
+    ax.text(
+        bbox_left + 3,
+        bbox_top + 1,
+        "Recording area (soundscapes)",
+        color="crimson",
+        fontsize=9,
+        ha="left",
+        va="top",
+    )
 
     title = "Recording locations (train)"
     if hue_col is not None:
         title += f" by {hue_col}"
 
-    plt.title(title)
+    # plt.title(title)
     plt.xlabel("Longitude")
     plt.ylabel("Latitude")
 
     # Keep the rectangle legend entry for no-hue and numeric-hue cases.
-    if hue_col is None or pd.api.types.is_numeric_dtype(geo[hue_col]):
-        plt.legend()
-
+    # if hue_col is None or pd.api.types.is_numeric_dtype(geo[hue_col]):
+    # plt.legend()
     plt.tight_layout()
+    return fig
 
 
 def _parse_primary_label_list(value):
@@ -283,18 +293,12 @@ def _to_seconds(value):
 def plot_soundscape_species_activity(
     soundscapes,
     taxonomy,
+    class_colors,
     filename=None,
     ax=None,
     show_legend=True,
     title=None,
 ):
-    class_colors = {
-        "Aves": "#3B82F6",
-        "Mammalia": "#F97316",
-        "Amphibia": "#12843C",
-        "Reptilia": "#EF4444",
-        "Insecta": "#A855F7",
-    }
 
     df = soundscapes.loc[soundscapes["filename"] == filename, ["start_sec", "end_sec", "primary_label_list"]].copy()
     # df["start_sec"] = pd.to_timedelta(df["start"]).dt.total_seconds()
@@ -339,8 +343,8 @@ def plot_soundscape_species_activity(
     x_max = float((df["start_sec"] + df["duration"]).max())
     ax.set_xlim(x_min, x_max)
     ax.set_ylim(-0.5, len(species_order) - 0.5)
-    ax.set_yticks(range(len(species_order)))
-    ax.set_yticklabels(species_labels, fontsize=8)
+    ax.set_yticks([])
+    ax.set_yticklabels([], fontsize=8)
 
     tick_step = 5 if (x_max - x_min) <= 300 else 30
     ax.set_xticks(np.arange(np.floor(x_min / tick_step) * tick_step, x_max + tick_step, tick_step))
@@ -506,15 +510,17 @@ def plot_waveform_rms_db_with_silence(
     return fig, axes, silent_seconds, silence_segments
 
 
-def plot_orig_vs_clean_audios(y_orig, y_clean, sr, n_mels, n_fft, hop_length):
-    fig, axes = plt.subplots(4, 1, figsize=(10, 7))
+def plot_orig_vs_clean_audios(y_orig, y_clean, sr, n_mels, n_fft, hop_length, title=""):
+    fig, axes = plt.subplots(2, 1, figsize=(7, 4))
 
     # Compute mel spectrograms
     S_orig = librosa.feature.melspectrogram(y=y_orig, sr=sr, n_mels=n_mels, n_fft=n_fft, hop_length=hop_length)
-    if y_clean is not None:
-        S_clean = librosa.feature.melspectrogram(y=y_clean, sr=sr, n_mels=n_mels, n_fft=n_fft, hop_length=hop_length)
-    else:
-        S_clean = None
+    S_clean = librosa.feature.melspectrogram(y=y_clean, sr=sr, n_mels=n_mels, n_fft=n_fft, hop_length=hop_length)
+
+    # if y_clean is not None:
+    #
+    # else:
+    #     S_clean = None
 
     # Original mel spectrogram
     img1 = librosa.display.specshow(
@@ -526,41 +532,43 @@ def plot_orig_vs_clean_audios(y_orig, y_clean, sr, n_mels, n_fft, hop_length):
         cmap='magma',
     )
     axes[0].figure.colorbar(img1, ax=axes[0], format='%+2.0f dB')
-    axes[0].set_title("Mel Spectrogram [original]")
+    axes[0].set_title("Original Mel Spectrogram (dB re 1)")
 
     # Cleaned mel spectrogram or message
-    if S_clean is not None:
-        img2 = librosa.display.specshow(
-            librosa.power_to_db(S_clean, ref=1.0),
-            sr=sr,
-            x_axis='time',
-            y_axis='mel',
-            ax=axes[1],
-            cmap='magma',
-        )
-        axes[1].figure.colorbar(img2, ax=axes[1], format='%+2.0f dB')
-        axes[1].set_title("Mel Spectrogram [cleaned]")
-    else:
-        axes[1].text(0.5, 0.5, "No cleaned mel spectrogram", ha='center', va='center', fontsize=12, color='red')
-        axes[1].set_title("Mel Spectrogram [cleaned]")
-        axes[1].set_xticks([])
-        axes[1].set_yticks([])
 
-    # Original waveform
-    librosa.display.waveshow(y_orig, sr=sr, ax=axes[2])
-    axes[2].set_title("Waveform [original]")
+    img2 = librosa.display.specshow(
+        librosa.power_to_db(S_clean, ref=1.0),
+        sr=sr,
+        x_axis='time',
+        y_axis='mel',
+        ax=axes[1],
+        cmap='magma',
+    )
+    axes[1].figure.colorbar(img2, ax=axes[1], format='%+2.0f dB')
+    axes[1].set_title("Cleaned Mel Spectrogram (dB re 1)")
+    # else:
+    #     axes[1].text(0.5, 0.5, "No cleaned mel spectrogram", ha='center', va='center', fontsize=12, color='red')
+    #     axes[1].set_title("Mel Spectrogram [cleaned]")
+    #     axes[1].set_xticks([])
+    #     axes[1].set_yticks([])
 
-    # Cleaned waveform or message
-    if y_clean is not None:
-        librosa.display.waveshow(y_clean, sr=sr, ax=axes[3])
-        axes[3].set_title("Waveform [cleaned]")
-    else:
-        axes[3].text(0.5, 0.5, "No cleaned waveform", ha='center', va='center', fontsize=12, color='red')
-        axes[3].set_title("Waveform [cleaned]")
-        axes[3].set_xticks([])
-        axes[3].set_yticks([])
+    fig.suptitle(title, y=0.95, fontsize=12)
+    # # Original waveform
+    # librosa.display.waveshow(y_orig, sr=sr, ax=axes[2])
+    # axes[2].set_title("Waveform [original]")
+
+    # # Cleaned waveform or message
+    # if y_clean is not None:
+    #     librosa.display.waveshow(y_clean, sr=sr, ax=axes[3])
+    #     axes[3].set_title("Waveform [cleaned]")
+    # else:
+    #     axes[3].text(0.5, 0.5, "No cleaned waveform", ha='center', va='center', fontsize=12, color='red')
+    #     axes[3].set_title("Waveform [cleaned]")
+    #     axes[3].set_xticks([])
+    #     axes[3].set_yticks([])
 
     plt.tight_layout()
+    return fig
 
 
 def plot_spectral_diagnostics(path, feature_cfg, axes=None, title="Mel Spectrogram + Centroid/Rolloff"):

@@ -5,18 +5,20 @@ import joblib
 import pandas as pd
 import numpy as np
 
-from birdclef_2026_ml.audio import apply_spectral_gating
+from birdclef_2026_ml.audio import apply_spectral_gating, apply_silence_trimming
 from birdclef_2026_ml.configs import (
     PipelineConfig,
     SpectralGatingConfig,
-    load_pipeline_config
+    load_pipeline_config,
+    load_config
 )
 from birdclef_2026_ml.feature_engineering import (
     build_profiles,
     extract_save_mel_spectograms,
 )
+from birdclef_2026_ml.inference.ovr_inference import run_ovr_inference
+from birdclef_2026_ml.inference.mil_inference import run_mil_inference
 from birdclef_2026_ml.paths import ProjectPaths, load_project_paths
-from birdclef_2026_ml.processing.audio_utils import load_config
 from birdclef_2026_ml.processing.feature_dataset_builder import (
     build_feature_memmap_artifacts,
     build_soundscape_feature_memmap_artifacts,
@@ -24,15 +26,28 @@ from birdclef_2026_ml.processing.feature_dataset_builder import (
 )
 from birdclef_2026_ml.processing.memmap_dataset import load_memmap_dataset
 from birdclef_2026_ml.processing.preprocess import preprocess_datasets_for_models
-from birdclef_2026_ml.training.model_training import (
+from birdclef_2026_ml.training.ovr_training import (
     calibrate_and_save_ovr_models_chunks,
-    tune_and_save_ovr_thresholds,
+    # tune_and_save_ovr_thresholds,
     train_and_save_ovr_models_chunks,
+)
+# from birdclef_2026_ml.training.mil import train_and_save_second_stage_mil_ovr
+from birdclef_2026_ml.training.ss_ovr_training import (
+    run_soundscape_oof_evaluation_and_training,
+)
+from birdclef_2026_ml.training.ss_second_stage import (
+    build_mil_second_stage_clean_audio_data,
+    fit_second_stage_soundscapes,
+    fit_mil_second_stage_clean_audio,
+    train_mil_second_stage_clean_audio,
+    run_mil_second_stage_clean_audio_soundscape_inference,
+    # finetune_mil_second_stage_clean_audio_soundscape_oof,
+    fit_second_stage_soundscapes_with_mil_proba,
 )
 
 
 DATASET_CHOICES = ("train", "soundscapes")
-STAGE_CHOICES = ("raw", "clean")
+STAGE_CHOICES = ("raw", "clean", "clean_trim")
 FEATURE_KIND_CHOICES = ("mel", "pooled")
 
 
@@ -71,6 +86,161 @@ def _build_parser() -> argparse.ArgumentParser:
     parser_fit_ovr_models_chunks.add_argument("--run-name", type=str, required=True)
     parser_fit_ovr_models_chunks.add_argument("--experiment", type=str, required=True)
 
+    parser_mil_clean = subparsers.add_parser(
+        "train-mil-second-stage-clean",
+        help="Train MIL second-stage model on clean audio bags.",
+    )
+    parser_mil_clean.add_argument("--run-name", type=str, required=True)
+    parser_mil_clean.add_argument("--experiment", type=str, required=True)
+    parser_mil_clean.add_argument("--model-filename", type=str, default=None)
+    parser_mil_clean.add_argument(
+        "--full",
+        action="store_true",
+        help="Use full (non-reduced) matrices when running stage-1 inference.",
+    )
+    parser_mil_clean.add_argument(
+        "--bag-batch-size",
+        type=int,
+        default=512,
+        help="Bag batch size for building MIL features.",
+    )
+
+    parser_mil_clean_data = subparsers.add_parser(
+        "build-mil-second-stage-clean-data",
+        help="Build clean-audio MIL second-stage features and targets.",
+    )
+    parser_mil_clean_data.add_argument("--run-name", type=str, required=True)
+    parser_mil_clean_data.add_argument("--experiment", type=str, required=True)
+    parser_mil_clean_data.add_argument("--model-filename", type=str, default=None)
+    parser_mil_clean_data.add_argument(
+        "--full",
+        action="store_true",
+        help="Use full (non-reduced) matrices when building features.",
+    )
+    parser_mil_clean_data.add_argument(
+        "--bag-batch-size",
+        type=int,
+        default=512,
+        help="Bag batch size for building MIL features.",
+    )
+    parser_mil_clean_data.add_argument(
+        "--soundscapes",
+        action="store_true",
+        help="Use soundscape MIL matrices and bag metadata.",
+    )
+
+    parser_mil_clean_train = subparsers.add_parser(
+        "train-mil-second-stage-clean-model",
+        help="Train MIL second-stage model from saved clean-audio features.",
+    )
+    parser_mil_clean_train.add_argument("--run-name", type=str, required=True)
+    parser_mil_clean_train.add_argument("--experiment", type=str, required=True)
+    parser_mil_clean_train.add_argument("--model-filename", type=str, default=None)
+
+    parser_mil_clean_soundscape = subparsers.add_parser(
+        "run-mil-second-stage-clean-soundscape",
+        help="Run clean-audio second-stage models on soundscape bag features.",
+    )
+    parser_mil_clean_soundscape.add_argument("--run-name", type=str, required=True)
+    parser_mil_clean_soundscape.add_argument("--experiment", type=str, required=True)
+    parser_mil_clean_soundscape.add_argument("--model-filename", type=str, default=None)
+
+    # parser_mil_clean_soundscape_oof = subparsers.add_parser(
+    #     "run-mil-second-stage-clean-soundscape-oof",
+    #     help="Warm-start clean-audio second-stage models and score soundscape OOF.",
+    # )
+    # parser_mil_clean_soundscape_oof.add_argument("--run-name", type=str, required=True)
+    # parser_mil_clean_soundscape_oof.add_argument("--experiment", type=str, required=True)
+    # parser_mil_clean_soundscape_oof.add_argument("--model-filename", type=str, default=None)
+    # parser_mil_clean_soundscape_oof.add_argument("--n-splits", type=int, default=5)
+    # parser_mil_clean_soundscape_oof.add_argument("--random-state", type=int, default=42)
+    # parser_mil_clean_soundscape_oof.add_argument(
+    #     "--no-shuffle",
+    #     action="store_true",
+    #     help="Disable shuffle in soundscape OOF splits.",
+    # )
+    # parser_mil_clean_soundscape_oof.add_argument(
+    #     "--max-iter",
+    #     type=int,
+    #     default=200,
+    #     help="Max iterations for warm-start fine-tuning per fold.",
+    # )
+    # parser_mil_clean_soundscape_oof.add_argument(
+    #     "--full",
+    #     action="store_true",
+    #     help="Use full (non-reduced) soundscape matrices.",
+    # )
+
+    parser_soundscape_mil_context = subparsers.add_parser(
+        "run-soundscape-mil-context-oof",
+        help="Train soundscape OOF model on P(bag), bag stats, and context features.",
+    )
+    parser_soundscape_mil_context.add_argument("--run-name", type=str, required=True)
+    parser_soundscape_mil_context.add_argument("--experiment", type=str, required=True)
+    parser_soundscape_mil_context.add_argument("--model-filename", type=str, default=None)
+    parser_soundscape_mil_context.add_argument("--n-splits", type=int, default=5)
+    parser_soundscape_mil_context.add_argument("--random-state", type=int, default=42)
+    parser_soundscape_mil_context.add_argument(
+        "--no-shuffle",
+        action="store_true",
+        help="Disable shuffle in soundscape OOF splits.",
+    )
+    parser_soundscape_mil_context.add_argument(
+        "--full",
+        action="store_true",
+        help="Use full (non-reduced) soundscape matrices.",
+    )
+
+    parser_soundscape_second_stage = subparsers.add_parser(
+        "run-soundscape-second-stage",
+        help="Train soundscape OOF model on stage-1 probas and context features.",
+    )
+    parser_soundscape_second_stage.add_argument("--run-name", type=str, required=True)
+    parser_soundscape_second_stage.add_argument("--experiment", type=str, required=True)
+    parser_soundscape_second_stage.add_argument("--model-filename", type=str, default=None)
+    parser_soundscape_second_stage.add_argument("--n-splits", type=int, default=5)
+    parser_soundscape_second_stage.add_argument(
+        "--batch-size",
+        type=int,
+        default=65536,
+        help="Batch size for stage-1 inference used in second-stage training.",
+    )
+    parser_soundscape_second_stage.add_argument(
+        "--full",
+        action="store_true",
+        help="Use full (non-reduced) soundscape matrices.",
+    )
+
+    # parser_train_mil_second_stage = subparsers.add_parser(
+    #     "train-mil-second-stage",
+    #     help="Train primary_label second-stage EBM OVR on augmented MIL bag probabilities.",
+    # )
+    # parser_train_mil_second_stage.add_argument("--run-name", type=str, required=True)
+    # parser_train_mil_second_stage.add_argument("--experiment", type=str, required=True)
+    # parser_train_mil_second_stage.add_argument("--model-filename", type=str, default=None)
+    # parser_train_mil_second_stage.add_argument(
+    #     "--full",
+    #     action="store_true",
+    #     help="Use full (non-reduced) matrices when running stage-1 inference.",
+    # )
+
+    parser_soundscape_oof = subparsers.add_parser(
+        "run-soundscape-oof",
+        help="Run soundscape OOF calibration, threshold tuning, and final predictions.",
+    )
+    parser_soundscape_oof.add_argument("--run-name", type=str, required=True)
+    parser_soundscape_oof.add_argument("--experiment", type=str, required=True)
+    parser_soundscape_oof.add_argument("--calibration", type=str, default=None)
+    parser_soundscape_oof.add_argument("--model-filename", type=str, default=None)
+    parser_soundscape_oof.add_argument("--n-splits", type=int, default=5)
+    parser_soundscape_oof.add_argument("--random-state", type=int, default=42)
+    parser_soundscape_oof.add_argument("--max-rounds", type=int, default=2)
+    parser_soundscape_oof.add_argument(
+        "--full",
+        action="store_true",
+        help="Use full (non-reduced) soundscape feature matrices.",
+    )
+
     parser_calibrate_ovr_models_chunks = subparsers.add_parser(
         "calibrate-ovr-models-chunks",
         help="Calibrate pretrained OVR models for one saved run and experiment.",
@@ -94,6 +264,54 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=("class_name", "primary_label"),
     )
     parser_tune_ovr_thresholds.add_argument("--max-rounds", type=int, default=2)
+
+    parser_run_ovr_inference = subparsers.add_parser(
+        "run-ovr-inference",
+        help="Run inference with saved OVR artifacts.",
+    )
+    parser_run_ovr_inference.add_argument("--run-name", type=str, required=True)
+    parser_run_ovr_inference.add_argument("--experiment", type=str, required=True)
+    parser_run_ovr_inference.add_argument("--model-filename", type=str, default=None)
+    parser_run_ovr_inference.add_argument(
+        "--soundscapes",
+        action="store_true",
+        help="Run inference on soundscape feature matrices.",
+    )
+    parser_run_ovr_inference.add_argument(
+        "--full",
+        action="store_true",
+        help="Use full (non-reduced) feature matrices.",
+    )
+
+    parser_run_mil_inference = subparsers.add_parser(
+        "run-mil-inference",
+        help="Aggregate OVR probabilities into MIL bag predictions.",
+    )
+    parser_run_mil_inference.add_argument("--run-name", type=str, required=True)
+    parser_run_mil_inference.add_argument("--experiment", type=str, required=True)
+    parser_run_mil_inference.add_argument("--model-filename", type=str, default=None)
+    parser_run_mil_inference.add_argument(
+        "--aggregation",
+        type=str,
+        default="mean",
+        choices=("max", "mean", "noisy_or"),
+    )
+    parser_run_mil_inference.add_argument(
+        "--soundscapes",
+        action="store_true",
+        help="Run MIL aggregation on soundscape matrices.",
+    )
+    parser_run_mil_inference.add_argument(
+        "--full",
+        action="store_true",
+        help="Use full (non-reduced) feature matrices.",
+    )
+    parser_run_mil_inference.add_argument(
+        "--val-idx-path",
+        type=str,
+        default=None,
+        help="Optional .npy path for validation indices to remap to bag ids.",
+    )
 
     parser_build_feature_matrices = subparsers.add_parser(
         "build-feature-matrices",
@@ -138,6 +356,18 @@ def _build_parser() -> argparse.ArgumentParser:
     parser_spectral_gating.add_argument("--output-stage", type=str, default="clean", choices=STAGE_CHOICES)
     parser_spectral_gating.add_argument("--filename-col", type=str, default="filename")
 
+    parser_trim_train_silence = subparsers.add_parser(
+        "trim-train-silence",
+        help="Trim leading/trailing silence from clean train audio.",
+    )
+    parser_trim_train_silence.add_argument(
+        "--top-db",
+        type=float,
+        default=20.0,
+        help="Silence threshold for librosa.effects.trim.",
+    )
+    parser_trim_train_silence.add_argument("--filename-col", type=str, default="filename")
+
     subparsers.add_parser(
         "preprocess-datasets-for-models",
         help="Preprocess train and soundscape metadata for modeling.",
@@ -148,7 +378,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Extract raw log-mel spectrograms for one dataset.",
     )
     parser_mel.add_argument("--dataset", type=str, required=True, choices=DATASET_CHOICES)
-    parser_mel.add_argument("--audio-stage", type=str, default="clean", choices=STAGE_CHOICES)
+    parser_mel.add_argument("--audio-stage", type=str, required=True, choices=STAGE_CHOICES)
 
     # parser_pool_mel = subparsers.add_parser(
     #     "pool-mel-features",
@@ -217,10 +447,27 @@ def _run_spectral_gating(args, paths: ProjectPaths):
     )
 
 
+def _run_trim_train_silence(args, paths: ProjectPaths):
+    df = pd.read_parquet(paths.train_processed)
+    df = df.drop_duplicates(subset=["filename"]).reset_index(drop=True)
+
+    duration_trim = apply_silence_trimming(
+        df=df,
+        input_root=paths.train_audio_clean_dir,
+        output_root=paths.train_audio_clean_trim_dir,
+        filename_col=args.filename_col,
+        top_db=args.top_db,
+    )
+
+    df["duration_trim"] = duration_trim
+    df.to_parquet(paths.train_processed, index=False)
+
+
 def _run_extract_mel_spectograms(args, paths: ProjectPaths):
     pipeline_cfg = PipelineConfig()
     df = pd.read_parquet(_dataset_frame(paths, args.dataset))
 
+    print("Mel spectogram", _audio_dir(paths, args.dataset, args.audio_stage))
     extract_save_mel_spectograms(
         df=df,
         input_path=_audio_dir(paths, args.dataset, args.audio_stage),
@@ -253,7 +500,7 @@ def _run_build_feature_matrices(args, paths: ProjectPaths):
             pipeline_cfg=pipeline_cfg,
             pathroot=_audio_dir(paths, args.dataset, args.audio_stage),
             features_pathroot=_feature_dir(paths, args.dataset, args.feature_kind),
-            out_instances_path=paths.run_data_dir(args.run_name),
+            out_instances_path=paths.run_data_dir(args.run_name) / "full",
             profiles_path=paths.profiles_dir / "species_profiles.npy",
             species_ids_path=paths.profiles_dir / "species_profile_ids.npy",
         )
@@ -265,7 +512,7 @@ def _run_build_feature_matrices(args, paths: ProjectPaths):
         pathroot=_audio_dir(paths, args.dataset, args.audio_stage),
         filename_col="filename",
         features_pathroot=_feature_dir(paths, args.dataset, args.feature_kind),
-        out_instances_path=paths.run_data_dir(args.run_name),
+        out_instances_path=paths.run_data_dir(args.run_name) / "full",
         profiles_path=paths.profiles_dir / "species_profiles.npy",
         species_ids_path=paths.profiles_dir / "species_profile_ids.npy",
     )
@@ -284,6 +531,30 @@ def _run_train_ovr_models_chunks(args):
     train_and_save_ovr_models_chunks(args.run_name, args.experiment)
 
 
+def _run_soundscape_oof(args):
+    output_dir = run_soundscape_oof_evaluation_and_training(
+        run_name=args.run_name,
+        experiment_name=args.experiment,
+        calibration_name=args.calibration,
+        reduced=not args.full,
+        model_filename=args.model_filename,
+        n_splits=args.n_splits,
+        random_state=args.random_state,
+        max_rounds=args.max_rounds,
+    )
+    print(f"Soundscape OOF outputs saved to: {output_dir}")
+
+
+# def _run_train_mil_second_stage(args):
+#     output_dir = train_and_save_second_stage_mil_ovr(
+#         args.run_name,
+#         args.experiment,
+#         model_filename=args.model_filename,
+#         reduced=not args.full,
+#     )
+#     print(f"Second-stage MIL outputs saved to: {output_dir}")
+
+
 def _run_calibrate_ovr_models_chunks(args):
     calibrate_and_save_ovr_models_chunks(
         args.run_name,
@@ -293,14 +564,121 @@ def _run_calibrate_ovr_models_chunks(args):
 
 
 def _run_tune_ovr_thresholds(args):
-    tune_and_save_ovr_thresholds(
+    raise NotImplementedError(
+        "tune-ovr-thresholds CLI is not wired in current codebase."
+    )
+
+
+def _run_ovr_inference(args):
+    inference_dir = run_ovr_inference(
         args.run_name,
         args.experiment,
-        score_name=args.score,
         model_filename=args.model_filename,
-        target_name=args.target_name,
-        max_rounds=args.max_rounds,
+        reduced=not args.full,
+        soundscape=args.soundscapes,
     )
+    print(f"Inference outputs saved to: {inference_dir}")
+
+
+def _run_mil_inference(args):
+    val_idx = None
+    if args.val_idx_path:
+        val_idx = np.load(Path(args.val_idx_path))
+    outputs = run_mil_inference(
+        args.run_name,
+        args.experiment,
+        model_filename=args.model_filename,
+        reduced=not args.full,
+        soundscape=args.soundscapes,
+        aggregation=args.aggregation,
+        val_idx=val_idx,
+    )
+    print("MIL inference outputs saved under the experiment inference directory.")
+    return outputs
+
+
+def _run_train_mil_second_stage_clean(args):
+    output_dir = fit_mil_second_stage_clean_audio(
+        args.run_name,
+        args.experiment,
+        reduced=not args.full,
+        model_filename=args.model_filename,
+        bag_batch_size=args.bag_batch_size,
+    )
+    print(f"MIL clean-audio second-stage outputs saved to: {output_dir}")
+
+
+def _run_build_mil_second_stage_clean_data(args):
+    output_dir = build_mil_second_stage_clean_audio_data(
+        args.run_name,
+        args.experiment,
+        soundscape=args.soundscapes,
+        reduced=not args.full,
+        model_filename=args.model_filename,
+        bag_batch_size=args.bag_batch_size,
+    )
+    print(f"MIL clean-audio features saved to: {output_dir}")
+
+
+def _run_train_mil_second_stage_clean_model(args):
+    output_dir = train_mil_second_stage_clean_audio(
+        args.run_name,
+        args.experiment,
+        model_filename=args.model_filename,
+    )
+    print(f"MIL clean-audio model outputs saved to: {output_dir}")
+
+
+def _run_mil_second_stage_clean_soundscape(args):
+    output_path = run_mil_second_stage_clean_audio_soundscape_inference(
+        args.run_name,
+        args.experiment,
+        model_filename=args.model_filename,
+    )
+    print(f"MIL clean-audio soundscape inference saved to: {output_path}")
+
+
+# def _run_mil_second_stage_clean_soundscape_oof(args):
+#     output_path = finetune_mil_second_stage_clean_audio_soundscape_oof(
+#         args.run_name,
+#         args.experiment,
+#         model_filename=args.model_filename,
+#         reduced=not args.full,
+#         n_splits=args.n_splits,
+#         shuffle=not args.no_shuffle,
+#         random_state=args.random_state,
+#         max_iter=args.max_iter,
+#     )
+#     print(f"MIL clean-audio soundscape OOF saved to: {output_path}")
+
+
+def _run_soundscape_mil_context_oof(args, paths: ProjectPaths):
+    soundscapes = pd.read_parquet(paths.soundscapes_processed)
+    output_path = fit_second_stage_soundscapes_with_mil_proba(
+        soundscapes,
+        args.run_name,
+        args.experiment,
+        reduced=not args.full,
+        model_filename=args.model_filename,
+        n_splits=args.n_splits,
+        shuffle=not args.no_shuffle,
+        random_state=args.random_state,
+    )
+    print(f"Soundscape MIL context OOF saved to: {output_path}")
+
+
+def _run_soundscape_second_stage(args, paths: ProjectPaths):
+    soundscapes = pd.read_parquet(paths.soundscapes_processed)
+    output_dir = fit_second_stage_soundscapes(
+        soundscapes,
+        args.run_name,
+        args.experiment,
+        reduced=not args.full,
+        model_filename=args.model_filename,
+        batch_size=args.batch_size,
+        n_splits=args.n_splits,
+    )
+    print(f"Soundscape second-stage outputs saved to: {output_dir}")
 
 
 def main(argv=None) -> int:
@@ -313,12 +691,6 @@ def main(argv=None) -> int:
 
     paths = load_project_paths(args.project_config)
 
-    if args.command == "build-feature-matrices":
-        _run_build_feature_matrices(args, paths)
-        return 0
-    if args.command == "reduce-feature-matrices":
-        _run_reduce_feature_matrices(args, paths)
-        return 0
     if args.command == "preprocess-datasets-for-models":
         _run_preprocess_datasets_for_models(paths)
         return 0
@@ -326,23 +698,63 @@ def main(argv=None) -> int:
         _run_spectral_gating(args, paths)
         print("Spectral gating completed.")
         return 0
-    # if args.command == "build-profiles":
-    #     _run_build_profiles(args, paths)
-    #     return 0
+    if args.command == "trim-train-silence":
+        _run_trim_train_silence(args, paths)
+        print("Train silence trimming completed.")
+        return 0
     if args.command == "extract-mel-spectograms":
         _run_extract_mel_spectograms(args, paths)
         return 0
     if args.command == "build-profiles":
         _run_build_profiles(args, paths)
         return 0
+    if args.command == "build-feature-matrices":
+        _run_build_feature_matrices(args, paths)
+        return 0
+    if args.command == "reduce-feature-matrices":
+        _run_reduce_feature_matrices(args, paths)
+        return 0
     if args.command == "train-ovr-models-chunks":
         _run_train_ovr_models_chunks(args)
+        return 0
+    # if args.command == "train-mil-second-stage":
+    #     _run_train_mil_second_stage(args)
+    #     return 0
+    if args.command == "run-soundscape-oof":
+        _run_soundscape_oof(args)
         return 0
     if args.command == "calibrate-ovr-models-chunks":
         _run_calibrate_ovr_models_chunks(args)
         return 0
     if args.command == "tune-ovr-thresholds":
         _run_tune_ovr_thresholds(args)
+        return 0
+    if args.command == "run-ovr-inference":
+        _run_ovr_inference(args)
+        return 0
+    if args.command == "run-mil-inference":
+        _run_mil_inference(args)
+        return 0
+    if args.command == "train-mil-second-stage-clean":
+        _run_train_mil_second_stage_clean(args)
+        return 0
+    if args.command == "build-mil-second-stage-clean-data":
+        _run_build_mil_second_stage_clean_data(args)
+        return 0
+    if args.command == "train-mil-second-stage-clean-model":
+        _run_train_mil_second_stage_clean_model(args)
+        return 0
+    if args.command == "run-mil-second-stage-clean-soundscape":
+        _run_mil_second_stage_clean_soundscape(args)
+        return 0
+    # if args.command == "run-mil-second-stage-clean-soundscape-oof":
+    #     _run_mil_second_stage_clean_soundscape_oof(args)
+    #     return 0
+    if args.command == "run-soundscape-mil-context-oof":
+        _run_soundscape_mil_context_oof(args, paths)
+        return 0
+    if args.command == "run-soundscape-second-stage":
+        _run_soundscape_second_stage(args, paths)
         return 0
 
     parser.error(f"Unknown command: {args.command}")

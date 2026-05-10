@@ -40,3 +40,7 @@ uv.lock
 
 # agents
 skills/
+
+# visuals
+notebooks/plots
+tikz/

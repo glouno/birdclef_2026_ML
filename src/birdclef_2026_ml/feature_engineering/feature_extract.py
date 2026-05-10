@@ -90,6 +90,7 @@ def compute_mel_spectrogram(y: np.ndarray, cfg: FeatureConfig) -> np.ndarray:
         n_mels=cfg.n_mels,
         n_fft=cfg.n_fft,
         hop_length=cfg.hop_length,
+        center=False
     )
     return librosa.power_to_db(mel_spectrogram, ref=np.max)
 
@@ -225,6 +226,7 @@ def extract_glcm_features(
         patch = quant[:, start:end]
 
         if patch.shape[1] >= 2:
+            # Time direction : how pixel intensities change from one time frame to the next at the same frequency
             glcm_time = _glcm_from_pairs(patch[:, :-1], patch[:, 1:], cfg.texture_quant_levels)
             stats = _glcm_stats(glcm_time)
             out["glcm_time_contrast"][0, frame_idx] = stats[0]
@@ -233,6 +235,7 @@ def extract_glcm_features(
             out["glcm_time_energy"][0, frame_idx] = stats[3]
 
         if patch.shape[0] >= 2:
+            # Frequency direction : how energy is distributed across frequency bins at a fixed time
             glcm_freq = _glcm_from_pairs(patch[:-1, :], patch[1:, :], cfg.texture_quant_levels)
             stats = _glcm_stats(glcm_freq)
             out["glcm_freq_contrast"][0, frame_idx] = stats[0]

@@ -1,4 +1,4 @@
-from typing import Any
+import joblib
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -7,11 +7,13 @@ import seaborn as sns
 from sklearn.metrics import (
     accuracy_score,
     average_precision_score,
+    balanced_accuracy_score,
     confusion_matrix,
     hamming_loss,
     label_ranking_average_precision_score,
     precision_recall_fscore_support,
     roc_auc_score,
+    top_k_accuracy_score
 )
 from sklearn.preprocessing import MultiLabelBinarizer, label_binarize
 
@@ -20,11 +22,14 @@ from birdclef_2026_ml.configs import PipelineConfig
 from birdclef_2026_ml.models.one_vs_rest import OneVsRestArtifacts, predict_proba_one_vs_rest
 from birdclef_2026_ml.paths import load_project_paths
 from birdclef_2026_ml.processing.audio_utils import get_path, load_audio
+from birdclef_2026_ml.processing.memmap_dataset import load_memmap_dataset
+from birdclef_2026_ml.inference.ovr_inference import predict_from_artifacts_batched
+from birdclef_2026_ml.models.hierarchical import predict_proba_soft_combination
 
 
-def calc_macro_roc_auc(y_true, y_proba, classes):
+def safe_singlelabel_roc_auc(y_true, y_proba, classes):
     y_true_bin = label_binarize(y_true, classes=classes)
-
+    print(y_true_bin)
     aucs = []
     valid_class_indices = []
 
@@ -44,7 +49,129 @@ def calc_macro_roc_auc(y_true, y_proba, classes):
     return macro_roc_auc
 
 
-def evaluate_multiclass(
+def safe_multilabel_roc_auc(y_true: np.ndarray, y_score: np.ndarray, average="macro"):
+    """
+    Computes ROC-AUC for multilabel data safely, skipping classes
+    that have only one label present.
+
+    Parameters
+    ----------
+    y_true : (n_samples, n_classes) binary ground truth
+    y_score : (n_samples, n_classes) predicted scores
+    average : str
+        "macro" or "per_class" or "weighted"
+
+    Returns
+    -------
+    float
+        aggregated ROC-AUC over valid classes
+    dict
+        per-class AUCs (NaN filtered)
+    """
+
+    n_classes = y_true.shape[1]
+    aucs = np.full(n_classes, np.nan, dtype=float)
+
+    for c in range(n_classes):
+        yt = y_true[:, c]
+        ys = y_score[:, c]
+
+        # Skip invalid classes (only one label present)
+        if np.unique(yt).size < 2:
+            continue
+
+        aucs[c] = roc_auc_score(yt, ys)
+
+    valid = ~np.isnan(aucs)
+
+    if valid.sum() == 0:
+        return np.nan, aucs
+
+    if average == "macro":
+        return float(np.mean(aucs[valid])), aucs
+
+    if average == "weighted":
+        support = y_true.sum(axis=0)
+        return float(np.average(aucs[valid], weights=support[valid])), aucs
+
+    if average == "per_class":
+        return aucs, aucs
+
+    raise ValueError(f"Unknown average='{average}'")
+
+
+def safe_singlelabel_average_precision(y_true, y_proba, classes):
+    y_true_bin = label_binarize(y_true, classes=classes)
+
+    aps = []
+
+    for k in range(y_true_bin.shape[1]):
+        y_true_k = y_true_bin[:, k]
+        y_proba_k = y_proba[:, k]
+
+        # Skip classes with only one label present.
+        if np.unique(y_true_k).size < 2:
+            continue
+
+        ap = average_precision_score(y_true_k, y_proba_k)
+        aps.append(ap)
+
+    macro_ap = np.mean(aps) if len(aps) > 0 else np.nan
+    return macro_ap
+
+
+def safe_multilabel_average_precision(y_true: np.ndarray, y_score: np.ndarray, average="macro"):
+    """
+    Computes average precision for multilabel data safely, skipping classes
+    that have only one label present.
+
+    Parameters
+    ----------
+    y_true : (n_samples, n_classes) binary ground truth
+    y_score : (n_samples, n_classes) predicted scores
+    average : str
+        "macro" or "per_class" or "weighted"
+
+    Returns
+    -------
+    float
+        aggregated average precision over valid classes
+    np.ndarray
+        per-class APs (NaN filtered)
+    """
+
+    n_classes = y_true.shape[1]
+    aps = np.full(n_classes, np.nan, dtype=float)
+
+    for c in range(n_classes):
+        yt = y_true[:, c]
+        ys = y_score[:, c]
+
+        # Skip invalid classes (only one label present)
+        if np.unique(yt).size < 2:
+            continue
+
+        aps[c] = average_precision_score(yt, ys)
+
+    valid = ~np.isnan(aps)
+
+    if valid.sum() == 0:
+        return np.nan, aps
+
+    if average == "macro":
+        return float(np.mean(aps[valid])), aps
+
+    if average == "weighted":
+        support = y_true.sum(axis=0)
+        return float(np.average(aps[valid], weights=support[valid])), aps
+
+    if average == "per_class":
+        return aps, aps
+
+    raise ValueError(f"Unknown average='{average}'")
+
+
+def eval_multiclass_singlelabel(
     y_true,
     y_pred,
     y_proba,
@@ -53,8 +180,6 @@ def evaluate_multiclass(
     approach: str,
 ):
     """Evaluate multiclass predictions with requested macro metrics."""
-    mask = ()
-
     y_true = np.asarray(y_true)
     y_pred = np.asarray(y_pred)
     y_proba = np.asarray(y_proba, dtype=float)
@@ -79,17 +204,24 @@ def evaluate_multiclass(
             f"{y_proba.shape[1]} != {len(classes)}"
         )
 
+    top2 = top_k_accuracy_score(y_true, y_pred, k=2)
+    top3 = top_k_accuracy_score(y_true, y_pred, k=3)
+
     acc = accuracy_score(y_true, y_pred)
+    bal_acc = balanced_accuracy_score(y_true, y_pred)
 
     macro_prec, macro_rec, macro_f1, macro_support = precision_recall_fscore_support(
         y_true, y_pred, average="macro", zero_division=0
     )
 
-    macro_roc_auc = calc_macro_roc_auc(y_true, y_proba, classes)
+    macro_roc_auc = safe_singlelabel_roc_auc(y_true, y_proba, classes)
 
     print(f"\n===== {target_name} | {approach} =====")
     print(f"n_samples={len(y_true)}")
     print(f"accuracy={acc:.4f}")
+    print(f"balanced_accuracy={bal_acc:.4f}")
+    print(f"top2_accuracy={top2:.4f}")
+    print(f"top3_accuracy={top3:.4f}")
     print(f"macro_precision={macro_prec:.4f}")
     print(f"macro_recall={macro_rec:.4f}")
     print(f"macro_f1={macro_f1:.4f}")
@@ -100,6 +232,9 @@ def evaluate_multiclass(
         "approach": approach,
         "n_samples": len(y_true),
         "accuracy": acc,
+        "balanced_accuracy": bal_acc,
+        "top2_accuracy": top2,
+        "top3_accuracy": top3,
         "macro_precision": macro_prec,
         "macro_recall": macro_rec,
         "macro_f1": macro_f1,
@@ -108,7 +243,7 @@ def evaluate_multiclass(
     }
 
 
-def plot_confusion_matrix(y_true, y_pred, labels=None, ax=None, normalize="true", cmap="Blues", annot=True, fmt="g"):
+def plot_confusion_matrix(y_true, y_pred, labels=None, ax=None, cmap="Blues", annot=True, fmt=".2f"):
     """
     Plot a normalized confusion matrix using seaborn heatmap.
     Args:
@@ -116,7 +251,6 @@ def plot_confusion_matrix(y_true, y_pred, labels=None, ax=None, normalize="true"
         y_pred: Predicted labels (array-like)
         labels: List/array of label names (optional, will use sorted unique labels if None)
         ax: matplotlib axis to plot on (optional)
-        normalize: Normalization mode for confusion_matrix (default: "true")
         cmap: Colormap for heatmap
         annot: Annotate cells with values
         fmt: Format for annotations
@@ -124,254 +258,139 @@ def plot_confusion_matrix(y_true, y_pred, labels=None, ax=None, normalize="true"
         The matplotlib axis with the plot.
     """
 
-    if labels is None:
-        labels = np.unique(np.concatenate([y_true, y_pred]))
-    cm = confusion_matrix(y_true, y_pred, labels=labels, normalize=normalize)
+    cm = confusion_matrix(y_true, y_pred, labels=labels, normalize="true")
 
     if ax is None:
         fig, ax = plt.subplots(figsize=(8, 6))
-    sns.heatmap(cm, annot=annot, fmt=fmt, cmap=cmap, ax=ax,
-                xticklabels=labels, yticklabels=labels)
+
+    xticklabels = False
+    yticklabels = False
+    if len(labels) < 10:
+        xticklabels = labels
+        yticklabels = labels
+    sns.heatmap(cm, annot=annot, fmt=fmt, cmap=cmap, ax=ax, vmin=0,
+                vmax=1, xticklabels=xticklabels, yticklabels=yticklabels, cbar=False)
     ax.set_ylabel("True label")
     ax.set_xlabel("Predicted label")
     ax.set_title("Normalized Confusion Matrix")
     return ax
 
 
-def _build_soundscape_segment_input(
-    y: np.ndarray,
-    artifacts: OneVsRestArtifacts,
-    pipeline_cfg: PipelineConfig
-) -> tuple[np.ndarray, list[str]]:
-    if artifacts.mil_mode:
-        return build_mil_feature_matrix(
-            y=y,
-            pipeline_cfg=pipeline_cfg
+def eval_train_test(run_name: str, experiment_name: str):
+    paths = load_project_paths()
+    primary_to_class = np.load(paths.primary_to_class / "primary_to_class.npy")
+
+    experiment_path = paths.experiment_dir(run_name, experiment_name)
+
+    dataset = load_memmap_dataset(run_name=run_name, reduced=True, soundscape=False)
+
+    artifacts = joblib.load(experiment_path / "sgdclassifier_ovr.joblib")
+    val_idx = np.load(experiment_path / "val_indices.npy")
+
+    true_class_name = dataset.y[val_idx, 0]
+    true_primary_label = dataset.y[val_idx, 1]
+    n_class_name = len(artifacts.class_name.label_encoder.classes_)
+    n_primary_label = len(artifacts.primary_label.label_encoder.classes_)
+
+    X_val = dataset.X[val_idx]
+    probas, preds = predict_from_artifacts_batched(
+        X_val, artifacts, batch_size=65536
+    )
+
+    def _print_metrics(label: str, roc_auc: float, avg_precision: float):
+        roc_str = f"{roc_auc:.4f}" if np.isfinite(roc_auc) else "nan"
+        ap_str = f"{avg_precision:.4f}" if np.isfinite(avg_precision) else "nan"
+        print(f"{label}: roc_auc={roc_str} avg_precision={ap_str}")
+
+    print("1. Without soft combination")
+    class_classes = np.arange(n_class_name)
+    primary_classes = np.arange(n_primary_label)
+    _print_metrics(
+        "class_name",
+        safe_singlelabel_roc_auc(true_class_name, probas["class_name"], class_classes),
+        safe_singlelabel_average_precision(true_class_name, probas["class_name"], class_classes),
+    )
+    _print_metrics(
+        "primary_label",
+        safe_singlelabel_roc_auc(true_primary_label, probas["primary_label"], primary_classes),
+        safe_singlelabel_average_precision(true_primary_label, probas["primary_label"], primary_classes),
+    )
+
+    print("2. With soft combination")
+    probas_soft = predict_proba_soft_combination(
+        artifacts_class_name=artifacts.class_name,
+        artifacts_primary_label=artifacts.primary_label,
+        x=X_val,
+        y_class_name=primary_to_class
+    )
+
+    _print_metrics(
+        "primary_label_soft",
+        safe_singlelabel_roc_auc(true_primary_label, probas_soft, primary_classes),
+        safe_singlelabel_average_precision(true_primary_label, probas_soft, primary_classes),
+    )
+    return probas, probas_soft
+    # plot_confusion_matrix(true_class_name, preds["class_name"], normalize="true", annot=True)
+
+
+def eval_soundscapes(run_name: str, experiment_name: str, probas_file: str = None):
+    paths = load_project_paths()
+    primary_to_class = np.load(paths.primary_to_class / "primary_to_class.npy")
+
+    experiment_path = paths.experiment_dir(run_name, experiment_name)
+    soundscape_dir = experiment_path / "soundscapes"
+    probas_primary_label = None
+    probas_class_name = None
+    probas_soft = None
+    dataset = load_memmap_dataset(run_name=run_name, reduced=True, soundscape=True)
+    artifacts = joblib.load(experiment_path / "sgdclassifier_ovr.joblib")
+
+    if probas_file:
+        probas_primary_label = np.load(soundscape_dir / probas_file)
+
+    else:
+        probas, _ = predict_from_artifacts_batched(
+            dataset.X, artifacts, batch_size=65536
+        )
+        probas_class_name = probas["class_name"]
+        probas_primary_label = probas["primary_label"]
+
+    true_class_name = dataset.y[:, 0, :5]
+    true_primary_label = dataset.y[:, 1, :]
+    # n_primary_label = len(artifacts.primary_label.label_encoder.classes_)
+
+    def _print_metrics(label: str, roc_auc: float, avg_precision: float):
+        roc_str = f"{roc_auc:.4f}" if np.isfinite(roc_auc) else "nan"
+        ap_str = f"{avg_precision:.4f}" if np.isfinite(avg_precision) else "nan"
+        print(f"{label}: roc_auc={roc_str} avg_precision={ap_str}")
+
+    print("1. Without soft combination")
+    if probas_class_name is not None:
+        roc_auc, _ = safe_multilabel_roc_auc(true_class_name, probas_class_name)
+        avg_precision, _ = safe_multilabel_average_precision(true_class_name, probas_class_name)
+        _print_metrics("class_name", roc_auc, avg_precision)
+        lrap = label_ranking_average_precision_score(true_class_name, probas_class_name)
+        print(f"class_name: lrap={lrap:.4f}" if np.isfinite(lrap) else "class_name: lrap=nan")
+
+    roc_auc, _ = safe_multilabel_roc_auc(true_primary_label, probas_primary_label)
+    avg_precision, _ = safe_multilabel_average_precision(true_primary_label, probas_primary_label)
+    _print_metrics("primary_label", roc_auc, avg_precision)
+    lrap = label_ranking_average_precision_score(true_primary_label, probas_primary_label)
+    print(f"primary_label: lrap={lrap:.4f}" if np.isfinite(lrap) else "primary_label: lrap=nan")
+
+    if probas_class_name is not None:
+        print("2. With soft combination")
+        probas_soft = predict_proba_soft_combination(
+            artifacts_class_name=artifacts.class_name,
+            artifacts_primary_label=artifacts.primary_label,
+            x=dataset.X,
+            y_class_name=primary_to_class
         )
 
-    return build_feature_vector(
-        y=y,
-        pipeline_cfg=pipeline_cfg
-    )
-
-
-def evaluate_soundscapes_multilabel(
-    soundscapes,
-    artifacts: OneVsRestArtifacts,
-    pipeline_cfg: PipelineConfig,
-    target_name: str = "primary_label",
-    label_col: str = "primary_label_list",
-    filename_col: str = "filename",
-    start_col: str = "start_sec",
-    end_col: str = "end_sec",
-    pathroot: str = str(load_project_paths().train_soundscapes_dir),
-    threshold: float = 0.5,
-) -> dict[str, Any]:
-    """Evaluate multilabel soundscape predictions from annotated segments.
-
-    Each dataframe row is treated as one annotated segment and evaluated as one
-    multilabel sample. No file-level aggregation is performed.
-    """
-    if threshold < 0.0 or threshold > 1.0:
-        raise ValueError("threshold must be in [0, 1]")
-
-    required_cols = {filename_col, start_col, end_col, label_col}
-    missing_cols = required_cols.difference(soundscapes.columns)
-    if missing_cols:
-        raise ValueError(f"Missing required soundscape columns: {sorted(missing_cols)}")
-
-    mil_cfg = artifacts.mil_config
-    if artifacts.mil_mode and mil_cfg is None:
-        raise ValueError("MIL artifacts require mil_cfg for evaluation")
-
-    classes = np.asarray(artifacts.label_encoder.classes_)
-    known_classes = set(classes.tolist())
-
-    filenames: list[str] = []
-    segment_starts: list[float] = []
-    segment_ends: list[float] = []
-    y_true_labels: list[list[str]] = []
-    y_pred_labels: list[list[str]] = []
-    y_score_rows: list[np.ndarray] = []
-    dropped_unknown_labels = 0
-    skipped_segments = 0
-    feature_names_ref: list[str] | None = None
-
-    for row in soundscapes.itertuples(index=False):
-        filename = str(getattr(row, filename_col))
-        start_seconds = float(getattr(row, start_col))
-        end_seconds = float(getattr(row, end_col))
-        duration_seconds = end_seconds - start_seconds
-
-        if not np.isfinite(start_seconds) or not np.isfinite(end_seconds) or duration_seconds <= 0.0:
-            skipped_segments += 1
-            continue
-
-        row_labels: list[str] = []
-        for label in getattr(row, label_col):
-            label_str = str(label).strip()
-            if not label_str:
-                continue
-            if label_str in known_classes:
-                row_labels.append(label_str)
-            else:
-                dropped_unknown_labels += 1
-
-        audio_path = get_path(pathroot, filename)
-        y = load_audio(
-            filepath=audio_path,
-            sr=pipeline_cfg.feature.sr,
-            offset=start_seconds,
-            duration=duration_seconds,
-        )
-        if np.asarray(y).size == 0:
-            skipped_segments += 1
-            continue
-
-        segment_input, feature_names = _build_soundscape_segment_input(
-            y=np.asarray(y, dtype=float),
-            artifacts=artifacts,
-            pipeline_cfg=pipeline_cfg
-        )
-        if feature_names_ref is None:
-            feature_names_ref = list(feature_names)
-        elif feature_names != feature_names_ref:
-            raise RuntimeError("Inconsistent feature schema across soundscape segments")
-
-        model_input: Any
-        if artifacts.mil_mode:
-            model_input = [np.asarray(segment_input, dtype=float)]
-        else:
-            model_input = np.asarray(segment_input, dtype=float).reshape(1, -1)
-
-        segment_proba = np.asarray(predict_proba_one_vs_rest(artifacts, model_input), dtype=float)
-        segment_score = segment_proba[0]
-
-        pred_mask = segment_score >= threshold
-        pred_labels = classes[pred_mask].tolist()
-
-        filenames.append(filename)
-        segment_starts.append(start_seconds)
-        segment_ends.append(end_seconds)
-        y_true_labels.append(sorted(set(row_labels)))
-        y_pred_labels.append(pred_labels)
-        y_score_rows.append(segment_score)
-
-    if not y_score_rows:
-        raise ValueError("No usable annotated soundscape segments were found for evaluation")
-
-    mlb = MultiLabelBinarizer(classes=classes.tolist())
-    mlb.fit([classes.tolist()])
-    y_true_bin = mlb.transform(y_true_labels)
-    y_pred_bin = mlb.transform(y_pred_labels)
-    y_score = np.vstack(y_score_rows)
-
-    subset_accuracy = accuracy_score(y_true_bin, y_pred_bin)
-    macro_prec, macro_rec, macro_f1, _ = precision_recall_fscore_support(
-        y_true_bin,
-        y_pred_bin,
-        average="macro",
-        zero_division=0,
-    )
-    micro_prec, micro_rec, micro_f1, _ = precision_recall_fscore_support(
-        y_true_bin,
-        y_pred_bin,
-        average="micro",
-        zero_division=0,
-    )
-    samples_prec, samples_rec, samples_f1, _ = precision_recall_fscore_support(
-        y_true_bin,
-        y_pred_bin,
-        average="samples",
-        zero_division=0,
-    )
-
-    try:
-        macro_roc_auc = roc_auc_score(y_true_bin, y_score, average="macro")
-    except ValueError:
-        macro_roc_auc = np.nan
-
-    try:
-        micro_roc_auc = roc_auc_score(y_true_bin, y_score, average="micro")
-    except ValueError:
-        micro_roc_auc = np.nan
-
-    try:
-        macro_ap = average_precision_score(y_true_bin, y_score, average="macro")
-    except ValueError:
-        macro_ap = np.nan
-
-    try:
-        micro_ap = average_precision_score(y_true_bin, y_score, average="micro")
-    except ValueError:
-        micro_ap = np.nan
-
-    try:
-        lrap = label_ranking_average_precision_score(y_true_bin, y_score)
-    except ValueError:
-        lrap = np.nan
-
-    print(f"\n===== {target_name} | soundscape_multilabel_segment =====")
-    print(f"n_segments={len(filenames)}")
-    print(f"n_classes={len(classes)}")
-    print(f"subset_accuracy={subset_accuracy:.4f}")
-    print(f"hamming_loss={hamming_loss(y_true_bin, y_pred_bin):.4f}")
-    print(f"macro_precision={macro_prec:.4f}")
-    print(f"macro_recall={macro_rec:.4f}")
-    print(f"macro_f1={macro_f1:.4f}")
-    print(f"micro_precision={micro_prec:.4f}")
-    print(f"micro_recall={micro_rec:.4f}")
-    print(f"micro_f1={micro_f1:.4f}")
-    print(f"samples_precision={samples_prec:.4f}")
-    print(f"samples_recall={samples_rec:.4f}")
-    print(f"samples_f1={samples_f1:.4f}")
-    print(f"macro_roc_auc={macro_roc_auc:.4f}" if np.isfinite(macro_roc_auc) else "macro_roc_auc=nan")
-    print(f"micro_roc_auc={micro_roc_auc:.4f}" if np.isfinite(micro_roc_auc) else "micro_roc_auc=nan")
-    print(f"macro_average_precision={macro_ap:.4f}" if np.isfinite(macro_ap) else "macro_average_precision=nan")
-    print(f"micro_average_precision={micro_ap:.4f}" if np.isfinite(micro_ap) else "micro_average_precision=nan")
-    print(f"label_ranking_average_precision={lrap:.4f}" if np.isfinite(lrap) else "label_ranking_average_precision=nan")
-    if dropped_unknown_labels:
-        print(f"dropped_unknown_labels={dropped_unknown_labels}")
-    if skipped_segments:
-        print(f"skipped_segments={skipped_segments}")
-
-    predictions = pd.DataFrame(
-        {
-            filename_col: filenames,
-            start_col: segment_starts,
-            end_col: segment_ends,
-            "true_labels": y_true_labels,
-            "predicted_labels": y_pred_labels,
-        }
-    )
-
-    return {
-        "target": target_name,
-        "approach": "soundscape_multilabel_segment",
-        "n_segments": len(filenames),
-        "n_classes": len(classes),
-        "threshold": threshold,
-        "subset_accuracy": subset_accuracy,
-        "hamming_loss": hamming_loss(y_true_bin, y_pred_bin),
-        "macro_precision": macro_prec,
-        "macro_recall": macro_rec,
-        "macro_f1": macro_f1,
-        "micro_precision": micro_prec,
-        "micro_recall": micro_rec,
-        "micro_f1": micro_f1,
-        "samples_precision": samples_prec,
-        "samples_recall": samples_rec,
-        "samples_f1": samples_f1,
-        "macro_roc_auc": macro_roc_auc,
-        "micro_roc_auc": micro_roc_auc,
-        "macro_average_precision": macro_ap,
-        "micro_average_precision": micro_ap,
-        "label_ranking_average_precision": lrap,
-        "dropped_unknown_labels": dropped_unknown_labels,
-        "skipped_segments": skipped_segments,
-        "y_true": y_true_bin,
-        "y_pred": y_pred_bin,
-        "y_score": y_score,
-        "classes": classes,
-        "predictions": predictions,
-    }
+        roc_auc, _ = safe_multilabel_roc_auc(true_primary_label, probas_soft)
+        avg_precision, _ = safe_multilabel_average_precision(true_primary_label, probas_soft)
+        _print_metrics("primary_label_soft", roc_auc, avg_precision)
+        lrap = label_ranking_average_precision_score(true_primary_label, probas_soft)
+        print(f"primary_label_soft: lrap={lrap:.4f}" if np.isfinite(lrap) else "primary_label_soft: lrap=nan")
+    return probas_class_name, probas_primary_label, probas_soft
+    # plot_confusion_matrix(true_class_name, preds["class_name"], normalize="true", annot=True)

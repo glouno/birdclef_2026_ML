@@ -113,16 +113,3 @@ def save_ogg(path, y, sr):
         channels=1
     )
     audio.export(str(path), format="ogg", codec="libvorbis")
-
-
-def load_config(path: Path):
-    config = dict()
-    with open(path) as f:
-        config = json.load(f)
-    return config
-
-
-def save_config(obj, path: Path):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w") as f:
-        json.dump(obj.__dict__, f, indent=2)

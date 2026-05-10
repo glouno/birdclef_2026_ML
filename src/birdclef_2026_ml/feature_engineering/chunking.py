@@ -49,15 +49,24 @@ def get_sliding_window_intervals(
     # print(windows)
     return windows
 
+# Note : can overestimate the number of chunks if with_pad=False
+
 
 def get_duration_chunk_intervals(
     duration_s: float,
     chunk_cfg: ChunkConfig | MILConfig,
     sr: int,
+    n_fft: int,
     hop_length: int,
+    with_pad: bool = False
 ) -> list[tuple[int, int]]:
     frame_rate_hz = feature_frame_rate_hz(sr, hop_length)
-    n_frames = int(1 + np.floor(duration_s * sr / hop_length))
+    if with_pad:
+        pad = n_fft // 2
+        n_frames = 1 + np.floor((duration_s * sr + 2*pad - n_fft) / hop_length)
+    else:
+        n_frames = int(1 + np.floor(duration_s * sr / hop_length))
+
     return get_sliding_window_intervals(
         n_frames=n_frames,
         window_size_s=chunk_cfg.chunk_size_s,
@@ -66,16 +75,17 @@ def get_duration_chunk_intervals(
     )
 
 
-# TODO: overestimates by 1 number of chunks for some audios
 # When counting with mil_mode, assumption that ChunkConfig.chunk_size_s = ChunkConfig.step_size_s
 def count_nb_chunks(
     df,
     chunk_cfg: ChunkConfig | MILConfig,
     sr,
-    hop_length
+    n_fft: int,
+    hop_length,
+    with_pad: bool = False
 ):
     total = 0
     for dur in df["duration"].values:
-        intervals = get_duration_chunk_intervals(dur, chunk_cfg, sr, hop_length)
+        intervals = get_duration_chunk_intervals(dur, chunk_cfg, sr, n_fft, hop_length, with_pad)
         total += len(intervals)
     return total

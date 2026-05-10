@@ -64,8 +64,24 @@ def preprocess_soundscape(df: pd.DataFrame) -> pd.DataFrame:
     )
 
     # Datetime extraction
-    df[["date", "time"]] = df["filename"].str.extract(r'_(\d{8})_(\d{6})\.ogg$')
-    df["datetime"] = pd.to_datetime(df["date"] + " " + df["time"], format="%Y%m%d %H%M%S", errors="coerce")
+
+    # extract with named groups
+    pattern = r"S(?P<site>\d+)_(?P<date>\d{8})_(?P<time>\d{6})"
+
+    extracted = df["filename"].str.extract(pattern)
+
+    # convert types
+    df["site"] = extracted["site"].astype("int32")
+    df["date"] = pd.to_datetime(extracted["date"], format="%Y%m%d").dt.date
+    df["time"] = pd.to_datetime(extracted["time"], format="%H%M%S").dt.time
+
+    df["datetime"] = pd.to_datetime(
+        extracted["date"] + extracted["time"],
+        format="%Y%m%d%H%M%S",
+        utc=True
+    )
+    # df[["date", "time"]] = df["filename"].str.extract(r'_(\d{8})_(\d{6})\.ogg$')
+    # df["datetime"] = pd.to_datetime(df["date"] + " " + df["time"], format="%Y%m%d %H%M%S", errors="coerce")
 
     df.drop(columns=["date", "time"], inplace=True)
     _add_soundscape_time_columns(df)
@@ -115,11 +131,11 @@ def preprocess_datasets_for_models(train: pd.DataFrame,
     train = train.assign(
         primary_label_int=np.asarray(
             le_primary_label.transform(train["primary_label"]),
-            dtype=np.float32
+            dtype=np.int32
         ),
         class_name_int=np.asarray(
             le_class_name.transform(train["class_name"]),
-            dtype=np.float32
+            dtype=np.int32
         )
     )
 
@@ -133,7 +149,7 @@ def preprocess_datasets_for_models(train: pd.DataFrame,
         exploded
         .map(class_map)
         .groupby(level=0)
-        .agg(list)
+        .agg(lambda values: list(np.unique(values)))
     )
 
     soundscapes = soundscapes.assign(
@@ -143,14 +159,14 @@ def preprocess_datasets_for_models(train: pd.DataFrame,
     # primary_label_int_list
     soundscapes = soundscapes.assign(
         primary_label_int_list=soundscapes["primary_label_list"].apply(
-            lambda x: np.asarray(le_primary_label.transform(x), dtype=np.float32).tolist()
+            lambda x: np.asarray(le_primary_label.transform(x), dtype=np.int32).tolist()
         )
     )
 
     # class_name_int_list
     soundscapes = soundscapes.assign(
         class_name_int_list=soundscapes["class_name_list"].apply(
-            lambda x: np.asarray(np.unique(le_class_name.transform(x)), dtype=np.float32).tolist()
+            lambda x: np.asarray(np.unique(le_class_name.transform(x)), dtype=np.int32).tolist()
         )
     )
 

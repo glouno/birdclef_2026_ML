@@ -26,6 +26,8 @@ dependencies = [
     "soundfile>=0.13.1",
     "xgboost>=3.2.0",
     "pyyaml>=6.0.3",
+    "umap-learn>=0.5.12",
+    "interpret>=0.7.8",
 ]
 
 

@@ -17,11 +17,6 @@ from birdclef_2026_ml.models.hierarchical import (
     _to_1d,
     _validate_same_length,
 )
-# from birdclef_2026_ml.models.mil import (
-#     _validate_mil_enabled,
-#     flatten_mil_bags,
-#     predict_mil_proba,
-# )
 
 from birdclef_2026_ml.models.weights import (
     compute_pos_neg_weights,
@@ -111,14 +106,15 @@ def _build_scoped_training_data(
     pos_neg_weights_scopes,
     label_to_scope_mapping: dict[int, int] | None,
     val_idx_mapping_scopes: dict[int, Array1D] | None,
+    y_val: Array1D | None,
 ) -> _ScopedTrainingData:
     if label_to_scope_mapping is None:
         return _ScopedTrainingData(
-            train_idx=np.arange(len(y_enc), dtype=np.int64),
+            train_idx=np.arange(len(y_enc), dtype=np.int32),
             train_sample_weight=sample_weight,
             pos_neg_weights=pos_neg_weights[class_id],
             scope_value=None,
-            val_idx=None if val_idx_mapping_scopes is None else np.arange(0, 0, dtype=np.int64),
+            val_idx=None if y_val is None else np.arange(len(y_val), dtype=np.int32),
         )
 
     scope_value = label_to_scope_mapping[class_id]
@@ -128,7 +124,7 @@ def _build_scoped_training_data(
         pos_neg_weights=pos_neg_weights_scopes[scope_value][class_id],
         scope_value=scope_value,
         val_idx=None if val_idx_mapping_scopes is None else val_idx_mapping_scopes.get(
-            scope_value, np.arange(0, 0, dtype=np.int64)
+            scope_value, np.arange(0, 0, dtype=np.int32)
         ),
     )
 
@@ -187,6 +183,7 @@ def _fit_binary_estimator(
     no_improvement_count = 0
     binary_classes = np.array([0, 1], dtype=int)
 
+    print(f"Number of epochs:{epochs}", early_stopping, x_val is None, y_val is None, scoped_data.val_idx is None)
     for id_epoch in range(epochs):
         epoch_idx = resample(
             scoped_data.train_idx,
@@ -231,6 +228,7 @@ def _fit_binary_estimator(
             scalers=scalers,
             scope_value=scoped_data.scope_value,
         )
+        print(f"Best loss : {best_loss}, current_loss : {current_loss}, tol : {tol}")
         if best_loss - current_loss > tol:
             best_loss = current_loss
             best_estimator = deepcopy(estimator_binary)
@@ -280,6 +278,7 @@ def _fit_per_class_ovr_incremental(
 
     estimator_scope_values: list[Any] = []
     for class_id in classes:
+        # if label_to_scope_mapping is not None:
         scoped_data = _build_scoped_training_data(
             int(class_id),
             y_enc,
@@ -290,6 +289,7 @@ def _fit_per_class_ovr_incremental(
             pos_neg_weights_scopes=pos_neg_weights_scopes,
             label_to_scope_mapping=label_to_scope_mapping,
             val_idx_mapping_scopes=val_idx_mapping_scopes,
+            y_val=y_val,
         )
         print(f"Training {class_id} with {len(scoped_data.train_idx)} samples")
         scoped_classes = np.unique(y_enc[scoped_data.train_idx])
@@ -353,6 +353,41 @@ def _predict_proba_ovr(artifacts: OneVsRestArtifacts, x: Any) -> Array2D:
         "OneVsRestClassifier requires a base estimator exposing "
         "predict_proba or decision_function"
     )
+
+
+def _row_count(x: Any) -> int:
+    if hasattr(x, "shape"):
+        return int(x.shape[0])
+    return len(x)
+
+
+def _iter_batches(x: Any, batch_size: int):
+    if batch_size <= 0:
+        raise ValueError("batch_size must be > 0")
+    n_rows = _row_count(x)
+    for start in range(0, n_rows, batch_size):
+        stop = min(start + batch_size, n_rows)
+        print(start, stop)
+        yield x[start:stop]
+
+
+def _predict_proba_ovr_batched(
+    artifacts: OneVsRestArtifacts,
+    x: Any,
+    *,
+    batch_size: int,
+) -> Array2D:
+    n_rows = _row_count(x)
+    n_classes = len(artifacts.label_encoder.classes_)
+    if n_rows == 0:
+        return np.empty((0, n_classes), dtype=float)
+    if n_rows <= batch_size:
+        return _predict_proba_ovr(artifacts, x)
+
+    batches: list[Array2D] = []
+    for x_batch in _iter_batches(x, batch_size):
+        batches.append(_predict_proba_ovr(artifacts, x_batch))
+    return np.vstack(batches)
 
 
 def train_one_vs_rest_model(
@@ -449,6 +484,16 @@ def predict_proba_one_vs_rest(artifacts: OneVsRestArtifacts, x: Any) -> Array2D:
     return _predict_proba_ovr(artifacts, x)
 
 
+def predict_proba_one_vs_rest_batched(
+    artifacts: OneVsRestArtifacts,
+    x: Any,
+    *,
+    batch_size: int,
+) -> Array2D:
+    """Predict class probabilities for single-target one-vs-rest in batches."""
+    return _predict_proba_ovr_batched(artifacts, x, batch_size=batch_size)
+
+
 def predict_one_vs_rest(artifacts: OneVsRestArtifacts, x: Any) -> Array1D:
     """Predict hard labels for single-target one-vs-rest."""
     proba = predict_proba_one_vs_rest(artifacts, x)
@@ -542,12 +587,29 @@ def train_dual_one_vs_rest_models(
 
 def predict_proba_dual_one_vs_rest(
         artifacts: DualOneVsRestArtifacts,
-        x: Any,
+        x: Any
 ) -> dict[str, Array2D]:
     """Predict probabilities for both class_name and primary_label."""
     return {
         "class_name": predict_proba_one_vs_rest(artifacts.class_name, x),
         "primary_label": predict_proba_one_vs_rest(artifacts.primary_label, x),
+    }
+
+
+def predict_proba_dual_one_vs_rest_batched(
+    artifacts: DualOneVsRestArtifacts,
+    x: Any,
+    *,
+    batch_size: int,
+) -> dict[str, Array2D]:
+    """Predict probabilities for both class_name and primary_label in batches."""
+    return {
+        "class_name": predict_proba_one_vs_rest_batched(
+            artifacts.class_name, x, batch_size=batch_size
+        ),
+        "primary_label": predict_proba_one_vs_rest_batched(
+            artifacts.primary_label, x, batch_size=batch_size
+        ),
     }
 
 

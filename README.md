@@ -33,15 +33,16 @@ PROJECT_ROOT=/abs/path/to/repo uv run python -m birdclef_2026_ml ...
 
 1. Preprocess `train` and `soundscapes` metadata (convert `.csv` to `.parquet`).
 2. Apply spectral gating to both `train` and `soundscapes` audio files.
-3. Compute mel-spectrograms without time pooling. This accelerates the feature-building pipeline by allowing you to slice over time and experiment with different chunk durations. All other extracted audio features are computed from these mel-spectrograms.
-4. Calculate `primary_label` profiles (the idea is that different species operate at different frequencies).
-5. Define the run configuration (`FeatureConfig`, `ChunkConfig`, `MILConfig`) and extract all features, aggregating them per time chunk.
-6. [Optional] Reduce the number of features, e.g., by reducing the dimensionality of the mel-spectrogram from 128 to 32 mels.
-7. Train an `SGDClassifier` model to predict both `class_name` and `primary_label` (hierarchical approach).
-8. Run OVR inference (probabilities will be used afterwards)
+3. Trim silence on clean train audio.
+4. Compute mel-spectrograms without time pooling. This accelerates the feature-building pipeline by allowing you to slice over time and experiment with different chunk durations. All other extracted audio features are computed from these mel-spectrograms.
+5. Calculate `primary_label` profiles (the idea is that different species operate at different frequencies).
+6. Define the run configuration (`FeatureConfig`, `ChunkConfig`, `MILConfig`) and extract all features, aggregating them per time chunk.
+7. [Optional] Reduce the number of features, e.g., by reducing the dimensionality of the mel-spectrogram from 128 to 32 mels.
+8. Train an `SGDClassifier` model to predict both `class_name` and `primary_label` (hierarchical approach).
+9. Run OVR inference (probabilities will be used afterwards)
 <!-- 8. Train a second-stage OVR model on clean-audio MIL bag features to refine `primary_label`.
-9. Run soundscape OOF post-processing to calibrate probabilities, tune thresholds, and save multilabel predictions.
-10. Run OVR inference to generate predictions. -->
+10. Run soundscape OOF post-processing to calibrate probabilities, tune thresholds, and save multilabel predictions.
+11. Run OVR inference to generate predictions. -->
 
 ### Commands
 
@@ -73,23 +74,32 @@ uv run python -m birdclef_2026_ml spectral-gating --dataset soundscapes
 
 The input defaults to raw audio. The output is written to `data/interim/spectral_gating/...`.
 
-##### 3. Compute Mel-Spectrograms Without Time Pooling
+##### 3. Trim Silence on Clean Train Audio
+
+```bash
+uv run python -m birdclef_2026_ml trim-train-silence
+```
+
+The input is `data/interim/spectral_gating/train_audio`, and the output is written to
+`data/interim/spectral_gating_trim/train_audio`.
+
+##### 4. Compute Mel-Spectrograms Without Time Pooling
 
 Train:
 
 ```bash
-uv run python -m birdclef_2026_ml extract-mel-spectograms --dataset train
+uv run python -m birdclef_2026_ml extract-mel-spectograms --dataset train --audio-stage clean_trim
 ```
 
 Soundscapes:
 
 ```bash
-uv run python -m birdclef_2026_ml extract-mel-spectograms --dataset soundscapes
+uv run python -m birdclef_2026_ml extract-mel-spectograms --dataset soundscapes --audio-stage clean
 ```
 
 This writes raw log-mel `.npy` files to `data/interim/features/mel/...`.
 
-##### 4. Calculate `primary_label` Profiles
+##### 5. Calculate `primary_label` Profiles
 
 Build profiles using global median pooling and, by default, trimmed mean with a threshold of 0.1.
 
@@ -102,7 +112,7 @@ This command writes:
 - `data/processed/features/profiles/species_profiles.npy`
 - `data/processed/features/profiles/species_profile_ids.npy`
 
-##### 5. Extract All Features and Aggregate Per Time Chunk
+##### 6. Extract All Features and Aggregate Per Time Chunk
 
 Define the pipeline configuration in:
 
@@ -143,7 +153,7 @@ The derived feature families include:
 - `glcm_*`
 - `lbp_hist`
 
-##### 6. [Optional] Reduce the Number of Features
+##### 7. [Optional] Reduce the Number of Features
 
 Train:
 
@@ -158,13 +168,13 @@ Soundscapes:
 ```bash
 uv run python -m birdclef_2026_ml reduce-feature-matrices \
   --run-name <run-name> \
-  --target-mel-bins 32
+  --target-mel-bins 32 \
   --soundscapes
 ```
 
 This writes reduced copies suffixed with `_reduced` in the same run directory:
 
-##### 7. Train an `SGDClassifier` Model to Predict Both `class_name` and `primary_label` (Hierarchical Approach)
+##### 8. Train an `SGDClassifier` Model to Predict Both `class_name` and `primary_label` (Hierarchical Approach)
 
 ###### Train One-vs-Rest (OVR) Models
 
@@ -191,7 +201,7 @@ The training configuration supports custom batch early stopping in the OVR loop:
 
 When `training.early_stopping: true`, ensure `training.train_val_split: true` or provide validation data through the calling code.
 
-##### 8. Train MIL Second Stage on Clean-Audio Bags
+##### 9. Train MIL Second Stage on Clean-Audio Bags
 
 Train command:
 
@@ -217,6 +227,7 @@ uv run python -m birdclef_2026_ml train-mil-second-stage-clean-model \
   --experiment sgd_baseline
 ```
 
+<!--
 To run the trained clean-audio second-stage model on soundscape bag features:
 
 ```bash
@@ -231,7 +242,7 @@ To warm-start the clean-audio second-stage models and score soundscape OOF split
 uv run python -m birdclef_2026_ml run-mil-second-stage-clean-soundscape-oof \
   --run-name <run-name> \
   --experiment sgd_baseline
-```
+``` -->
 
 To train a soundscape OOF model using MIL soundscape probabilities + context features:
 
@@ -267,6 +278,7 @@ Outputs are saved in:
 
 ---
 
+<!--
 ## Run soundscape OOF post-processing
 
 This step loads trained `DualOneVsRestArtifacts`, predicts `class_name` and
@@ -311,7 +323,31 @@ Outputs are saved in:
 - `final/primary_label_predictions.npy`
 - `fold_<k>_train_indices.npy`, `fold_<k>_val_indices.npy`
 - `metrics.yaml`
-- `<model-stem>_soundscape_oof.joblib`
+- `<model-stem>_soundscape_oof.joblib` -->
+
+## Run soundscape second-stage (context features, no MIL)
+
+Trains a soundscape OOF model using stage-1 class/primary probabilities, their
+soft-combined probabilities, and context features (site/time).
+
+```bash
+uv run python -m birdclef_2026_ml run-soundscape-second-stage \
+  --run-name <run-name> \
+  --experiment sgd_baseline
+```
+
+Optional flags:
+
+- `--model-filename <file.joblib>` to use a non-default saved OVR artifact
+- `--n-splits <int>` to control grouped OOF fold count
+- `--batch-size <int>` to control stage-1 inference batch size
+- `--full` to use full (non-reduced) soundscape feature matrices
+
+Outputs are saved in:
+
+- `artifacts/models/runs/<run-name>/experiments/<experiment-name>/soundscapes/`
+- `oof_proba.npy`
+- `combined_proba.npy`
 
 ## Run OVR inference
 

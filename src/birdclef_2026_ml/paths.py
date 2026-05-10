@@ -45,6 +45,7 @@ class ProjectPaths:
     spectral_gating_config: Path
     feature_config: Path
     train_audio_clean_dir: Path
+    train_audio_clean_trim_dir: Path
     soundscapes_clean_dir: Path
     train_mel_dir: Path
     soundscapes_mel_dir: Path
@@ -54,6 +55,7 @@ class ProjectPaths:
     profiles_dir: Path
     runs_dir: Path
     experiments_dir: Path
+    train_val_filenames: Path  # clean audio (to train different variants on the same train dataset)
 
     def dataset_frame(self, dataset: str) -> Path:
         mapping = {
@@ -66,6 +68,7 @@ class ProjectPaths:
         mapping = {
             ("train", "raw"): self.train_audio_dir,
             ("train", "clean"): self.train_audio_clean_dir,
+            ("train", "clean_trim"): self.train_audio_clean_trim_dir,
             ("soundscapes", "raw"): self.train_soundscapes_dir,
             ("soundscapes", "clean"): self.soundscapes_clean_dir,
             ("test_soundscapes", "raw"): self.test_soundscapes_dir,
@@ -141,6 +144,7 @@ def _build_paths(config_data: dict[str, Any], *, project_root: Path, config_file
         primary_to_class=processed_dir / "metadata",
 
         train_audio_clean_dir=interim_dir / audio["train_clean"],
+        train_audio_clean_trim_dir=interim_dir / audio["train_clean_trim"],
         soundscapes_clean_dir=interim_dir / audio["soundscapes_clean"],
         train_mel_dir=interim_dir / audio["train_mel"],
         soundscapes_mel_dir=interim_dir / audio["soundscapes_mel"],
@@ -152,6 +156,7 @@ def _build_paths(config_data: dict[str, Any], *, project_root: Path, config_file
 
         spectral_gating_config=_resolve_path(configs["spectral_gating"], project_root=project_root),
         feature_config=_resolve_path(configs["features"], project_root=project_root),
+        train_val_filenames=models_dir / "train_val_filenames"
     )
 
 

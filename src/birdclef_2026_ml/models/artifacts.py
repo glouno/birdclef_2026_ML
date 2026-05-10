@@ -60,6 +60,67 @@ class ThresholdTunedDualOneVsRestArtifacts:
 
 
 @dataclass
+class PerClassProbabilityCalibrationArtifacts:
+    """Per-class probability calibration state for multilabel soundscape outputs."""
+
+    method: str
+    calibrators: list[Any | None]
+    constant_probabilities: Array1D
+
+
+@dataclass
+class SoundscapeTargetArtifacts:
+    """Calibration + threshold state for one multilabel target."""
+
+    calibration: PerClassProbabilityCalibrationArtifacts
+    thresholds: Array1D
+    score_name: str
+    best_score: float
+
+
+@dataclass
+class SoundscapeOOFFoldArtifacts:
+    """Stored train/validation indices for one OOF fold."""
+
+    fold_id: int
+    train_indices: Array1D
+    val_indices: Array1D
+
+
+@dataclass
+class SoundscapeOOFArtifacts:
+    """Full soundscape post-processing state fitted on OOF predictions."""
+
+    source_model_path: str
+    calibration_config: dict[str, Any]
+    fold_artifacts: list[SoundscapeOOFFoldArtifacts]
+    primary_label: SoundscapeTargetArtifacts
+
+
+@dataclass
+class SecondStagePrimaryLabelArtifacts:
+    """Stage-2 primary-label OVR model trained on bagged stage-1 probabilities."""
+
+    model: Any
+    label_encoder: LabelEncoder
+    active_label_indices: Array1D
+    feature_names: Array1D
+    source_model_path: str
+    training_summary: dict[str, Any]
+
+
+@dataclass
+class MILSecondStageCleanAudioArtifacts:
+    """Stage-2 per-class classifiers for clean-audio MIL bag features."""
+
+    estimators: list[Any | None]
+    label_encoder: LabelEncoder
+    fallback_positive_probs: list[float | None]
+    feature_names: Array1D | None = None
+    training_summary: dict[str, Any] | None = None
+
+
+@dataclass
 class PerClassOneVsRestClassifier:
     """One-vs-rest wrapper that supports per-class sample scopes and scaling."""
 
@@ -130,6 +191,11 @@ class PerClassOneVsRestClassifier:
             )
         proba = np.column_stack(positive_probs)
         return proba
+
+    def predict_log_proba(self, x: Any):
+        proba = self.predict_proba(x)
+        proba = np.clip(proba, 1e-12, 1.0 - 1e-12)
+        return np.log(proba)
 
     def decision_function(self, x: Any) -> Array2D:
         x_arr = np.asarray(x, dtype=float)

@@ -1,3 +1,4 @@
+import json
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -13,6 +14,7 @@ from birdclef_2026_ml.feature_engineering.chunking import (
     get_duration_chunk_intervals,
 )
 from birdclef_2026_ml.processing.audio_utils import load_audio
+from birdclef_2026_ml.processing.memmap_dataset import load_memmap_dataset
 
 
 def _slice_mel_spectrogram_by_seconds(
@@ -77,12 +79,51 @@ def _extract_soundscape_segment_features(
     )
 
 
-def _reduce_mel_family_features(
-    X: np.ndarray,
+def _write_memmap_metadata(
+    metadata_path: Path,
+    *,
+    feature_names: list[str],
+    file_ids: np.ndarray | list[str],
+    X_shape: tuple[int, ...],
+    y_shape: tuple[int, ...],
+    X_dtype: np.dtype,
+    y_dtype: np.dtype,
+    X_path: str,
+    y_path: str,
+    bags_meta: np.ndarray | None = None,
+    bags_meta_path: str | None = None,
+) -> None:
+    metadata = {
+        "X": {
+            "path": X_path,
+            "shape": [int(value) for value in X_shape],
+            "dtype": np.dtype(X_dtype).str,
+        },
+        "y": {
+            "path": y_path,
+            "shape": [int(value) for value in y_shape],
+            "dtype": np.dtype(y_dtype).str,
+        },
+        "feature_names": [str(name) for name in feature_names],
+        "file_ids": [str(value) for value in file_ids],
+    }
+
+    if bags_meta is not None and bags_meta_path is not None:
+        metadata["bags_meta"] = {
+            "path": bags_meta_path,
+            "shape": [int(value) for value in bags_meta.shape],
+            "dtype": np.dtype(bags_meta.dtype).str,
+        }
+
+    with metadata_path.open("w", encoding="utf-8") as handle:
+        json.dump(metadata, handle, indent=2)
+
+
+def _build_mel_reduction_step(
     feature_names: list[str],
     prefix: str,
-    target_bins: int = 32,
-) -> tuple[np.ndarray, list[str]]:
+    target_bins: int,
+) -> tuple[list[int], list[str], list[list[int]], list[str]]:
     grouped: dict[str, list[tuple[int, int]]] = {}
     keep_indices: list[int] = []
     keep_names: list[str] = []
@@ -105,12 +146,8 @@ def _reduce_mel_family_features(
         family = "_".join(parts[:-2])
         grouped.setdefault(f"{family}|{stat}", []).append((dim, idx))
 
-    reduced_cols: list[np.ndarray] = []
-    reduced_names: list[str] = []
-    if keep_indices:
-        reduced_cols.append(X[:, keep_indices])
-        reduced_names.extend(keep_names)
-
+    group_cols: list[list[int]] = []
+    group_names: list[str] = []
     for key in sorted(grouped.keys()):
         family, stat = key.split("|", 1)
         entries = sorted(grouped[key], key=lambda item: item[0])
@@ -119,10 +156,47 @@ def _reduce_mel_family_features(
             if len(group) == 0:
                 continue
             cols = [entries[i][1] for i in group]
-            reduced_cols.append(np.median(X[:, cols], axis=1, keepdims=True))
-            reduced_names.append(f"{family}_{out_dim:02d}_{stat}")
+            group_cols.append(cols)
+            group_names.append(f"{family}_{out_dim:02d}_{stat}")
 
-    X_reduced = np.hstack(reduced_cols) if reduced_cols else np.empty((X.shape[0], 0), dtype=float)
+    return keep_indices, keep_names, group_cols, group_names
+
+
+def _apply_mel_reduction_step(
+    X: np.ndarray,
+    keep_indices: list[int],
+    group_cols: list[list[int]],
+) -> np.ndarray:
+    reduced_cols: list[np.ndarray] = []
+    if keep_indices:
+        reduced_cols.append(X[:, keep_indices])
+
+    for cols in group_cols:
+        reduced_cols.append(np.median(X[:, cols], axis=1, keepdims=True))
+
+    if reduced_cols:
+        return np.hstack(reduced_cols)
+    return np.empty((X.shape[0], 0), dtype=float)
+
+
+def _reduce_mel_family_features(
+    X: np.ndarray,
+    feature_names: list[str],
+    prefix: str,
+    target_bins: int = 32,
+) -> tuple[np.ndarray, list[str]]:
+    print(f"[reduce_feature_vector] reduce family='{prefix}' target_bins={target_bins}")
+    keep_indices, keep_names, group_cols, group_names = _build_mel_reduction_step(
+        feature_names,
+        prefix=prefix,
+        target_bins=target_bins,
+    )
+    reduced_names = keep_names + group_names
+    X_reduced = _apply_mel_reduction_step(X, keep_indices, group_cols)
+    print(
+        f"[reduce_feature_vector] family done='{prefix}' keep={len(keep_indices)} "
+        f"reduced_groups={len(group_cols)} out_cols={len(reduced_names)}"
+    )
     return X_reduced, reduced_names
 
 
@@ -130,73 +204,176 @@ def reduce_feature_vector(
     X: np.ndarray,
     feature_names: list[str] | np.ndarray,
     target_mel_bins: int = 32,
+    batch_rows: int | None = None,
+    out: np.ndarray | None = None,
 ) -> tuple[np.ndarray, list[str]]:
     """
     Reduce feature matrix:
     - drop *_std
     - collapse mel/mel_delta/mel_delta2 dims from 128 -> target_mel_bins with median
     """
+    print(
+        f"[reduce_feature_vector] start rows={X.shape[0]} cols={X.shape[1]} "
+        f"target_mel_bins={target_mel_bins}"
+    )
     feature_names_list = [str(name) for name in feature_names]
     keep_mask = np.array([not name.endswith("_std") for name in feature_names_list], dtype=bool)
-    X_reduced = np.asarray(X[:, keep_mask], dtype=np.float32)
     reduced_names = [name for name, keep in zip(feature_names_list, keep_mask) if keep]
+    dropped = int(np.size(keep_mask) - int(np.sum(keep_mask)))
+    print(
+        f"[reduce_feature_vector] drop *_std removed={dropped} kept={len(reduced_names)}"
+    )
 
+    if batch_rows is None and isinstance(X, np.memmap):
+        keep_count = max(1, int(np.sum(keep_mask)))
+        target_bytes = 128 * 1024 * 1024
+        batch_rows = max(1, min(X.shape[0], int(target_bytes / (keep_count * 4))))
+
+    if batch_rows is None or X.shape[0] == 0:
+        X_reduced = np.asarray(X[:, keep_mask], dtype=np.float32)
+        for prefix in ("mel_spectrogram_", "mel_spectrogram_delta_", "mel_spectrogram_delta2_"):
+            X_reduced, reduced_names = _reduce_mel_family_features(
+                X_reduced,
+                reduced_names,
+                prefix=prefix,
+                target_bins=target_mel_bins,
+            )
+
+        print(
+            f"[reduce_feature_vector] done rows={X_reduced.shape[0]} cols={X_reduced.shape[1]}"
+        )
+        return X_reduced, reduced_names
+
+    keep_indices = np.flatnonzero(keep_mask).tolist()
+    steps: list[dict[str, object]] = []
     for prefix in ("mel_spectrogram_", "mel_spectrogram_delta_", "mel_spectrogram_delta2_"):
-        X_reduced, reduced_names = _reduce_mel_family_features(
-            X_reduced,
+        keep_idx, keep_names, group_cols, group_names = _build_mel_reduction_step(
             reduced_names,
             prefix=prefix,
             target_bins=target_mel_bins,
         )
+        steps.append(
+            {
+                "prefix": prefix,
+                "keep_indices": keep_idx,
+                "group_cols": group_cols,
+                "keep_count": len(keep_idx),
+                "group_count": len(group_cols),
+                "out_cols": len(keep_names) + len(group_names),
+            }
+        )
+        reduced_names = keep_names + group_names
 
-    return X_reduced, reduced_names
+    if out is None:
+        X_out = np.empty((X.shape[0], len(reduced_names)), dtype=np.float32)
+    else:
+        X_out = out
+        if X_out.shape != (X.shape[0], len(reduced_names)):
+            raise ValueError("Output shape does not match reduced feature shape.")
+
+    for step in steps:
+        print(
+            "[reduce_feature_vector] reduce family='{prefix}' target_bins={bins}".format(
+                prefix=step["prefix"],
+                bins=target_mel_bins,
+            )
+        )
+        print(
+            "[reduce_feature_vector] family plan='{prefix}' keep={keep} reduced_groups={groups} "
+            "out_cols={out_cols}".format(
+                prefix=step["prefix"],
+                keep=step["keep_count"],
+                groups=step["group_count"],
+                out_cols=step["out_cols"],
+            )
+        )
+
+    for start in range(0, X.shape[0], batch_rows):
+        end = min(start + batch_rows, X.shape[0])
+        X_batch = np.asarray(X[start:end, :][:, keep_indices], dtype=np.float32)
+        for step in steps:
+            X_batch = _apply_mel_reduction_step(
+                X_batch,
+                step["keep_indices"],
+                step["group_cols"],
+            )
+        X_out[start:end, :] = X_batch
+
+    print(
+        f"[reduce_feature_vector] done rows={X_out.shape[0]} cols={X_out.shape[1]}"
+    )
+    return X_out, reduced_names
 
 
 def reduce_feature_memmap(run_path: Path, target_mel_bins: int = 32, soundscapes: bool = False) -> tuple[np.ndarray, list[str]]:
     """
     Reduce saved memmap artifacts.
-    Saves reduced artifacts with `_reduced` suffix in same folder.
     """
     suffix = "_soundscape" if soundscapes else ""
-    feature_names = np.load(run_path / f"feature_names{suffix}.npy", allow_pickle=True)
-    X_shape = tuple(np.load(run_path / f"shape_X{suffix}.npy"))
-    y_shape = tuple(np.load(run_path / f"shape_y{suffix}.npy"))
-    X_dtype = np.load(run_path / f"dtype_X{suffix}.npy").item()
-    y_dtype = np.load(run_path / f"dtype_y{suffix}.npy").item()
+    run_name = run_path.parent.name
+    dataset = load_memmap_dataset(run_name=run_name, reduced=False, soundscape=soundscapes)
+    feature_names = dataset.feature_names
+    X = dataset.X
+    y = dataset.y
+    X_shape = X.shape
+    y_shape = y.shape
 
-    X = np.memmap(run_path / f"X{suffix}.dat", dtype=X_dtype, mode="r", shape=(X_shape[0], X_shape[1]))
-    y = np.memmap(run_path / f"y{suffix}.dat", dtype=y_dtype, mode="r", shape=y_shape)
+    feature_names_list = [str(name) for name in feature_names]
+    keep_mask = np.array([not name.endswith("_std") for name in feature_names_list], dtype=bool)
+    reduced_names = [name for name, keep in zip(feature_names_list, keep_mask) if keep]
+    for prefix in ("mel_spectrogram_", "mel_spectrogram_delta_", "mel_spectrogram_delta2_"):
+        _, keep_names, _, group_names = _build_mel_reduction_step(
+            reduced_names,
+            prefix=prefix,
+            target_bins=target_mel_bins,
+        )
+        reduced_names = keep_names + group_names
 
-    X_reduced, reduced_names = reduce_feature_vector(
-        np.asarray(X, dtype=np.float32),
-        feature_names,
-        target_mel_bins=target_mel_bins,
-    )
-
+    out_path = run_path / "reduced"
     X_out = np.memmap(
-        run_path / f"X{suffix}_reduced.dat",
+        out_path / f"X{suffix}.dat",
         mode="w+",
         dtype=np.float32,
-        shape=X_reduced.shape,
+        shape=(X_shape[0], len(reduced_names)),
     )
-    X_out[:] = X_reduced
-    X_out.flush()
+
+    X_reduced, reduced_names = reduce_feature_vector(
+        X,
+        feature_names,
+        target_mel_bins=target_mel_bins,
+        out=X_out,
+    )
+    if hasattr(X_reduced, "flush"):
+        X_reduced.flush()
 
     y_out = np.memmap(
-        run_path / f"y{suffix}_reduced.dat",
+        out_path / f"y{suffix}.dat",
         mode="w+",
-        dtype=y_dtype,
+        dtype=y.dtype,
         shape=y_shape,
     )
     y_out[:] = y
     y_out.flush()
 
-    np.save(run_path / f"feature_names{suffix}_reduced.npy", np.asarray(reduced_names, dtype=object))
-    np.save(run_path / f"file_ids{suffix}_reduced.npy", np.load(run_path / f"file_ids{suffix}.npy", allow_pickle=True))
-    np.save(run_path / f"shape_X{suffix}_reduced.npy", np.array(X_reduced.shape))
-    np.save(run_path / f"shape_y{suffix}_reduced.npy", np.array(y_shape))
-    np.save(run_path / f"dtype_X{suffix}_reduced.npy", np.array(str(np.dtype(np.float32))))
-    np.save(run_path / f"dtype_y{suffix}_reduced.npy", np.array(str(np.dtype(y_dtype))))
+    bags_meta = dataset.bags_meta
+    if bags_meta is not None:
+        np.save(out_path / f"bags_meta{suffix}.npy", bags_meta)
+
+    file_ids = dataset.filenames[:X_reduced.shape[0]]
+    metadata_path = out_path / f"metadata{suffix}.json"
+    _write_memmap_metadata(
+        metadata_path,
+        feature_names=reduced_names,
+        file_ids=file_ids,
+        X_shape=X_reduced.shape,
+        y_shape=y_shape,
+        X_dtype=np.float32,
+        y_dtype=y.dtype,
+        X_path=f"X{suffix}.dat",
+        y_path=f"y{suffix}.dat",
+        bags_meta=bags_meta,
+        bags_meta_path=f"bags_meta{suffix}.npy" if bags_meta is not None else None,
+    )
 
     return X_reduced, reduced_names
 
@@ -224,13 +401,17 @@ def _build_bags_meta_for_duration(
         duration_s,
         pipeline_cfg.chunk,
         pipeline_cfg.feature.sr,
+        pipeline_cfg.feature.n_fft,
         pipeline_cfg.feature.hop_length,
+        with_pad=False,
     )
     instance_intervals = get_duration_chunk_intervals(
         duration_s,
         pipeline_cfg.mil,
         pipeline_cfg.feature.sr,
+        pipeline_cfg.feature.n_fft,
         pipeline_cfg.feature.hop_length,
+        with_pad=True
     )
 
     rows: list[tuple[int, int]] = []
@@ -279,20 +460,14 @@ def build_feature_memmap_artifacts(
 
     print("Features", len(feature_names))
     n_features = len(feature_names)
-    bags_meta_rows: list[tuple[np.ndarray, int]] = []
-    if pipeline_cfg.mil_mode:
-        n_instances = 0
-        for duration_s in df["duration"].values:
-            row_bags_meta = _build_bags_meta_for_duration(duration_s, pipeline_cfg)
-            bags_meta_rows.append(row_bags_meta)
-            n_instances += row_bags_meta[0].shape[0]
-    else:
-        n_instances = count_nb_chunks(
-            df,
-            instance_pipeline_cfg.chunk,
-            instance_pipeline_cfg.feature.sr,
-            instance_pipeline_cfg.feature.hop_length,
-        )
+    n_instances = count_nb_chunks(
+        df,
+        instance_pipeline_cfg.chunk,
+        instance_pipeline_cfg.feature.n_fft,
+        instance_pipeline_cfg.feature.sr,
+        instance_pipeline_cfg.feature.hop_length,
+        with_pad=True
+    )
 
     print("Total number of instances", n_instances, "number of features", len(feature_names))
     out_instances_path.mkdir(parents=True, exist_ok=True)
@@ -313,7 +488,7 @@ def build_feature_memmap_artifacts(
     # Fill memmaps
     file_ids = np.empty(n_instances, dtype=object)
     bags_meta = (
-        np.empty((n_instances, 2), dtype=np.int32)
+        np.empty(n_instances, dtype=np.int32)
         if pipeline_cfg.mil_mode
         else None
     )
@@ -341,16 +516,7 @@ def build_feature_memmap_artifacts(
 
         n_chunks = len(matrix)
         if pipeline_cfg.mil_mode and bags_meta is not None:
-            row_bags_meta, n_bags = bags_meta_rows[row_idx]
-            if n_chunks != row_bags_meta.shape[0]:
-                raise RuntimeError(
-                    "MIL chunk count mismatch between pooled features and bags metadata "
-                    f"for {filename} ({n_chunks} != {row_bags_meta.shape[0]})."
-                )
-            row_bags_meta = row_bags_meta.copy()
-            row_bags_meta[:, 0] += bag_offset
-            bags_meta[cursor:cursor+n_chunks, :] = row_bags_meta
-            bag_offset += n_bags
+            bags_meta[cursor:cursor + n_chunks] = np.arange(0, n_chunks)
 
         X[cursor:cursor+n_chunks, :] = np.asarray(matrix, dtype=np.float32)
         pl = getattr(row, "primary_label_int")
@@ -364,16 +530,28 @@ def build_feature_memmap_artifacts(
 
     X.flush()
     y.flush()
-
+    print(bags_meta, cursor)
     # Metadata
-    np.save(out_instances_path / "feature_names.npy", feature_names)
-    np.save(out_instances_path / "file_ids.npy", file_ids)
-    np.save(out_instances_path / "shape_X.npy", np.array(X.shape))
-    np.save(out_instances_path / "shape_y.npy", np.array(y.shape))
-    np.save(out_instances_path / "dtype_X.npy", np.array(str(X.dtype)))
-    np.save(out_instances_path / "dtype_y.npy", np.array(str(y.dtype)))
+    X_shape = (cursor,) + X.shape[1:]
+    y_shape = (cursor,) + y.shape[1:]
+    file_ids = file_ids[:cursor]
     if bags_meta is not None:
+        bags_meta = bags_meta[:cursor]
         np.save(out_instances_path / "bags_meta.npy", bags_meta)
+
+    _write_memmap_metadata(
+        out_instances_path / "metadata.json",
+        feature_names=feature_names,
+        file_ids=file_ids,
+        X_shape=X_shape,
+        y_shape=y_shape,
+        X_dtype=X.dtype,
+        y_dtype=y.dtype,
+        X_path="X.dat",
+        y_path="y.dat",
+        bags_meta=bags_meta,
+        bags_meta_path="bags_meta.npy" if bags_meta is not None else None,
+    )
 
 
 def build_soundscape_feature_memmap_artifacts(
@@ -433,6 +611,7 @@ def build_soundscape_feature_memmap_artifacts(
                 duration_s,
                 instance_pipeline_cfg.chunk,
                 instance_pipeline_cfg.feature.sr,
+                instance_pipeline_cfg.feature.n_fft,
                 instance_pipeline_cfg.feature.hop_length,
             )
             n_instances += len(intervals)
@@ -519,11 +698,23 @@ def build_soundscape_feature_memmap_artifacts(
     y.flush()
 
     # Metadata
-    np.save(out_instances_path / "feature_names_soundscape.npy", feature_names)
-    np.save(out_instances_path / "file_ids_soundscape.npy", file_ids)
-    np.save(out_instances_path / "shape_X_soundscape.npy", np.array(X.shape))
-    np.save(out_instances_path / "shape_y_soundscape.npy", np.array(y.shape))
-    np.save(out_instances_path / "dtype_X_soundscape.npy", np.array(str(X.dtype)))
-    np.save(out_instances_path / "dtype_y_soundscape.npy", np.array(str(y.dtype)))
+    X_shape = (cursor,) + X.shape[1:]
+    y_shape = (cursor,) + y.shape[1:]
+    file_ids = file_ids[:cursor]
     if bags_meta is not None:
+        bags_meta = bags_meta[:cursor]
         np.save(out_instances_path / "bags_meta_soundscape.npy", bags_meta)
+
+    _write_memmap_metadata(
+        out_instances_path / "metadata_soundscape.json",
+        feature_names=feature_names,
+        file_ids=file_ids,
+        X_shape=X_shape,
+        y_shape=y_shape,
+        X_dtype=X.dtype,
+        y_dtype=y.dtype,
+        X_path="X_soundscape.dat",
+        y_path="y_soundscape.dat",
+        bags_meta=bags_meta,
+        bags_meta_path="bags_meta_soundscape.npy" if bags_meta is not None else None,
+    )
