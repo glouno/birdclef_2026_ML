@@ -83,37 +83,6 @@ def build_profiles(
     print(species_ids)
 
     return species_ids, profiles
-    # np.save(output_path / "species_profiles.npy", profiles)
-    # np.save(output_path / "species_profile_ids.npy", species_ids)
-
-    # def build_profile(
-    #     X: np.ndarray,
-    #     y: np.ndarray,
-    #     feature_names: list[str] | np.ndarray,
-    #     pooling_method: str = "median",
-    #     **kwargs,
-    # ) -> tuple[np.ndarray, np.ndarray]:
-
-    #     mel_mask = get_feature_indices(
-    #         feature_names=list(feature_names),
-    #         prefix="mel_spectrogram_",
-    #         suffix="_median",
-    #     )
-    #     if not mel_mask.any():
-    #         raise ValueError("No mel_spectrogram mean features found in feature_names.")
-
-    #     X_arr = X[:, mel_mask]
-    #     species_ids = y[:, 1]
-
-    #     unique_species, first_idx = np.unique(species_ids, return_index=True)
-    #     order = np.argsort(first_idx)
-    #     unique_species = unique_species[order]
-
-    #     profiles = [
-    #         species_pooling(X_arr[species_ids == species_id].T, method=pooling_method, **kwargs)
-    #         for species_id in unique_species
-    #     ]
-    #     return unique_species, np.asarray(profiles)
 
 
 def compute_profile_cosine_similarity(
@@ -136,15 +105,3 @@ def compute_profile_cosine_similarity(
 
     feature_names_out = [f"cos_mel_spectrogram_mean_{species_id}" for species_id in species_ids]
     return similarities.astype(np.float32), feature_names_out
-
-    # def save_profiles(
-    #     output_dir: Path,
-    #     species_ids: np.ndarray,
-    #     profiles: np.ndarray,
-    # ) -> tuple[Path, Path]:
-    #     output_dir.mkdir(parents=True, exist_ok=True)
-    #     profiles_path = output_dir / "species_profiles.npy"
-    #     species_ids_path = output_dir / "species_profile_ids.npy"
-    #     np.save(profiles_path, profiles)
-    #     np.save(species_ids_path, species_ids)
-    #     return profiles_path, species_ids_path

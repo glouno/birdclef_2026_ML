@@ -208,7 +208,6 @@ def fit_second_stage_soundscapes_with_mil_proba(
     if not mil_proba_path.exists():
         raise FileNotFoundError(f"Soundscape MIL proba not found: {mil_proba_path}")
     mil_proba = np.asarray(np.load(mil_proba_path), dtype=float)
-
     bag_features_path = clean_dir / "train_bag_features_primary_soundscape.npy"
     if not bag_features_path.exists():
         raise FileNotFoundError(f"Soundscape bag features not found: {bag_features_path}")
@@ -262,15 +261,7 @@ def fit_second_stage_soundscapes_with_mil_proba(
                 [base_features[val_idx], bag_features[class_id, val_idx]],
                 axis=1,
             )
-            # pipe = Pipeline([
-            #     ("scaler", StandardScaler()),
-            #     ("model", LogisticRegression(
-            #         max_iter=1000,
-            #         solver="liblinear",
-            #         class_weight="balanced",
-            #     ))
-            # ]
-            # )
+
             pipe = XGBClassifier(
                 n_estimators=300,
                 max_depth=3
