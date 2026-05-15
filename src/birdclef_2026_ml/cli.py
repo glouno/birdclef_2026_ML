@@ -17,7 +17,6 @@ from birdclef_2026_ml.feature_engineering import (
     extract_save_mel_spectograms,
 )
 from birdclef_2026_ml.inference.ovr_inference import run_ovr_inference
-from birdclef_2026_ml.inference.mil_inference import run_mil_inference
 from birdclef_2026_ml.paths import ProjectPaths, load_project_paths
 from birdclef_2026_ml.processing.feature_dataset_builder import (
     build_feature_memmap_artifacts,
@@ -193,36 +192,6 @@ def _build_parser() -> argparse.ArgumentParser:
         "--full",
         action="store_true",
         help="Use full (non-reduced) feature matrices.",
-    )
-
-    parser_run_mil_inference = subparsers.add_parser(
-        "run-mil-inference",
-        help="Aggregate OVR probabilities into MIL bag predictions.",
-    )
-    parser_run_mil_inference.add_argument("--run-name", type=str, required=True)
-    parser_run_mil_inference.add_argument("--experiment", type=str, required=True)
-    parser_run_mil_inference.add_argument("--model-filename", type=str, default=None)
-    parser_run_mil_inference.add_argument(
-        "--aggregation",
-        type=str,
-        default="mean",
-        choices=("max", "mean", "noisy_or"),
-    )
-    parser_run_mil_inference.add_argument(
-        "--soundscapes",
-        action="store_true",
-        help="Run MIL aggregation on soundscape matrices.",
-    )
-    parser_run_mil_inference.add_argument(
-        "--full",
-        action="store_true",
-        help="Use full (non-reduced) feature matrices.",
-    )
-    parser_run_mil_inference.add_argument(
-        "--val-idx-path",
-        type=str,
-        default=None,
-        help="Optional .npy path for validation indices to remap to bag ids.",
     )
 
     parser_build_feature_matrices = subparsers.add_parser(
@@ -432,23 +401,6 @@ def _run_ovr_inference(args):
     print(f"Inference outputs saved to: {inference_dir}")
 
 
-def _run_mil_inference(args):
-    val_idx = None
-    if args.val_idx_path:
-        val_idx = np.load(Path(args.val_idx_path))
-    outputs = run_mil_inference(
-        args.run_name,
-        args.experiment,
-        model_filename=args.model_filename,
-        reduced=not args.full,
-        soundscape=args.soundscapes,
-        aggregation=args.aggregation,
-        val_idx=val_idx,
-    )
-    print("MIL inference outputs saved under the experiment inference directory.")
-    return outputs
-
-
 def _run_train_mil_second_stage_clean(args):
     output_dir = fit_mil_second_stage_clean_audio(
         args.run_name,
@@ -557,9 +509,6 @@ def main(argv=None) -> int:
         return 0
     if args.command == "run-ovr-inference":
         _run_ovr_inference(args)
-        return 0
-    if args.command == "run-mil-inference":
-        _run_mil_inference(args)
         return 0
     if args.command == "train-mil-second-stage-clean":
         _run_train_mil_second_stage_clean(args)
