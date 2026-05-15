@@ -1,0 +1,19 @@
+model:
+  type: SGDClassifier
+  params:
+    loss: log_loss
+    penalty: elasticnet
+    alpha: 1.0e-4
+    max_iter: 3000
+    learning_rate: optimal
+    average: true
+    random_state: 42
+
+training:
+  batch_size: 1024
+  epochs: 20
+  train_val_split: true
+  early_stopping: true
+  n_iter_no_change: 4
+  tol: 1.0e-4
+  scope: true

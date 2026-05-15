@@ -18,6 +18,7 @@ datasets:
     soundscapes: train_soundscapes
     test_soundscapes: test_soundscapes
     train_clean: spectral_gating/train_audio
+    train_clean_trim: spectral_gating_trim/train_audio
     soundscapes_clean: spectral_gating/train_soundscapes
     train_mel: features/mel/train_audio
     soundscapes_mel: features/mel/train_soundscapes

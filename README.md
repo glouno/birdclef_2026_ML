@@ -40,9 +40,7 @@ PROJECT_ROOT=/abs/path/to/repo uv run python -m birdclef_2026_ml ...
 7. [Optional] Reduce the number of features, e.g., by reducing the dimensionality of the mel-spectrogram from 128 to 32 mels.
 8. Train an `SGDClassifier` model to predict both `class_name` and `primary_label` (hierarchical approach).
 9. Run OVR inference (probabilities will be used afterwards)
-<!-- 8. Train a second-stage OVR model on clean-audio MIL bag features to refine `primary_label`.
-10. Run soundscape OOF post-processing to calibrate probabilities, tune thresholds, and save multilabel predictions.
-11. Run OVR inference to generate predictions. -->
+10. Second-stage model based on model variant
 
 ### Commands
 
@@ -201,7 +199,63 @@ The training configuration supports custom batch early stopping in the OVR loop:
 
 When `training.early_stopping: true`, ensure `training.train_val_split: true` or provide validation data through the calling code.
 
-##### 9. Train MIL Second Stage on Clean-Audio Bags
+##### 9. Run OVR inference
+
+Inference loads a saved `.joblib` artifact and writes predictions under the
+experiment's `inference` subfolder.
+
+```bash
+uv run python -m birdclef_2026_ml run-ovr-inference \
+  --run-name <run-name> \
+  --experiment sgd_baseline \
+  --soundscapes
+```
+
+Optional flags:
+
+- `--model-filename <file.joblib>` to infer from a specific artifact
+- `--full` to use full (non-reduced) feature matrices
+
+Outputs are saved in:
+
+- `artifacts/models/runs/<run-name>/experiments/<experiment-name>/inference/`
+- `<model-stem>_class_name_probas.dat`, `<model-stem>_primary_label_probas.dat`
+- `<model-stem>_class_name_probas_shape.npy`, `<model-stem>_class_name_probas_dtype.npy`
+- `<model-stem>_primary_label_probas_shape.npy`, `<model-stem>_primary_label_probas_dtype.npy`
+- `<model-stem>_class_name_preds.npy`, `<model-stem>_primary_label_preds.npy`
+
+When `--soundscapes` is used, outputs are suffixed with `_soundscape` before the
+`_class_name_*` or `_primary_label_*` suffixes.
+
+EITHER
+
+##### 10. Run soundscape second-stage (context features, no MIL)
+
+Trains a soundscape OOF model using stage-1 class/primary probabilities, their
+soft-combined probabilities, and context features (site/time).
+
+```bash
+uv run python -m birdclef_2026_ml run-soundscape-second-stage \
+  --run-name <run-name> \
+  --experiment sgd_baseline
+```
+
+Optional flags:
+
+- `--model-filename <file.joblib>` to use a non-default saved OVR artifact
+- `--n-splits <int>` to control grouped OOF fold count
+- `--batch-size <int>` to control stage-1 inference batch size
+- `--full` to use full (non-reduced) soundscape feature matrices
+
+Outputs are saved in:
+
+- `artifacts/models/runs/<run-name>/experiments/<experiment-name>/soundscapes/`
+- `oof_proba.npy`
+- `combined_proba.npy`
+
+OR
+
+##### 10. Train MIL Second Stage on Clean-Audio Bags
 
 Train command:
 
@@ -226,23 +280,6 @@ uv run python -m birdclef_2026_ml train-mil-second-stage-clean-model \
   --run-name <run-name> \
   --experiment sgd_baseline
 ```
-
-<!--
-To run the trained clean-audio second-stage model on soundscape bag features:
-
-```bash
-uv run python -m birdclef_2026_ml run-mil-second-stage-clean-soundscape \
-  --run-name <run-name> \
-  --experiment sgd_baseline
-```
-
-To warm-start the clean-audio second-stage models and score soundscape OOF splits:
-
-```bash
-uv run python -m birdclef_2026_ml run-mil-second-stage-clean-soundscape-oof \
-  --run-name <run-name> \
-  --experiment sgd_baseline
-``` -->
 
 To train a soundscape OOF model using MIL soundscape probabilities + context features:
 
@@ -275,226 +312,3 @@ Outputs are saved in:
 - `<model-stem>_mil_second_stage_primary_soundscape_proba.npy`
 - `<model-stem>_mil_second_stage_primary_soundscape_oof.npy`
 - `<model-stem>_mil_second_stage_primary_soundscape_context_oof.npy`
-
----
-
-<!--
-## Run soundscape OOF post-processing
-
-This step loads trained `DualOneVsRestArtifacts`, predicts `class_name` and
-`primary_label` probabilities in log space on soundscapes, combines both heads,
-fits per-class probability calibrators with grouped out-of-fold splits,
-tunes per-class multilabel thresholds for macro F1, then saves OOF and final
-predictions under the experiment soundscape directory.
-
-```bash
-uv run python -m birdclef_2026_ml run-soundscape-oof \
-  --run-name <run-name> \
-  --experiment sgd_baseline \
-  --calibration calibration_sigmoid
-```
-
-Optional flags:
-
-- `--model-filename <file.joblib>` to use non-default saved OVR artifact
-- `--n-splits <int>` to control grouped OOF fold count
-- `--random-state <int>` to control OOF split seed
-- `--max-rounds <int>` to control threshold tuning passes
-- `--full` to use full (non-reduced) soundscape matrices
-
-Outputs are saved in:
-
-- `artifacts/models/runs/<run-name>/experiments/<experiment-name>/soundscapes/`
-- `oof/class_name_combined_log_proba.npy`
-- `oof/class_name_calibrated_proba.npy`
-- `oof/class_name_thresholds.npy`
-- `oof/class_name_predictions.npy`
-- `oof/primary_label_combined_log_proba.npy`
-- `oof/primary_label_calibrated_proba.npy`
-- `oof/primary_label_thresholds.npy`
-- `oof/primary_label_predictions.npy`
-- `final/class_name_combined_log_proba.npy`
-- `final/class_name_calibrated_proba.npy`
-- `final/class_name_thresholds.npy`
-- `final/class_name_predictions.npy`
-- `final/primary_label_combined_log_proba.npy`
-- `final/primary_label_calibrated_proba.npy`
-- `final/primary_label_thresholds.npy`
-- `final/primary_label_predictions.npy`
-- `fold_<k>_train_indices.npy`, `fold_<k>_val_indices.npy`
-- `metrics.yaml`
-- `<model-stem>_soundscape_oof.joblib` -->
-
-## Run soundscape second-stage (context features, no MIL)
-
-Trains a soundscape OOF model using stage-1 class/primary probabilities, their
-soft-combined probabilities, and context features (site/time).
-
-```bash
-uv run python -m birdclef_2026_ml run-soundscape-second-stage \
-  --run-name <run-name> \
-  --experiment sgd_baseline
-```
-
-Optional flags:
-
-- `--model-filename <file.joblib>` to use a non-default saved OVR artifact
-- `--n-splits <int>` to control grouped OOF fold count
-- `--batch-size <int>` to control stage-1 inference batch size
-- `--full` to use full (non-reduced) soundscape feature matrices
-
-Outputs are saved in:
-
-- `artifacts/models/runs/<run-name>/experiments/<experiment-name>/soundscapes/`
-- `oof_proba.npy`
-- `combined_proba.npy`
-
-## Run OVR inference
-
-Inference loads a saved `.joblib` artifact and writes predictions under the
-experiment's `inference` subfolder.
-
-```bash
-uv run python -m birdclef_2026_ml run-ovr-inference \
-  --run-name <run-name> \
-  --experiment sgd_baseline \
-  --soundscapes
-```
-
-Optional flags:
-
-- `--model-filename <file.joblib>` to infer from a specific artifact
-- `--full` to use full (non-reduced) feature matrices
-
-Outputs are saved in:
-
-- `artifacts/models/runs/<run-name>/experiments/<experiment-name>/inference/`
-- `<model-stem>_class_name_probas.dat`, `<model-stem>_primary_label_probas.dat`
-- `<model-stem>_class_name_probas_shape.npy`, `<model-stem>_class_name_probas_dtype.npy`
-- `<model-stem>_primary_label_probas_shape.npy`, `<model-stem>_primary_label_probas_dtype.npy`
-- `<model-stem>_class_name_preds.npy`, `<model-stem>_primary_label_preds.npy`
-
-When `--soundscapes` is used, outputs are suffixed with `_soundscape` before the
-`_class_name_*` or `_primary_label_*` suffixes.
-
-## Run MIL inference
-
-MIL inference aggregates window-level OVR probabilities into bag-level
-probabilities and predictions.
-
-```bash
-uv run python -m birdclef_2026_ml run-mil-inference \
-  --run-name <run-name> \
-  --experiment sgd_baseline \
-  --aggregation mean
-```
-
-Optional flags:
-
-- `--model-filename <file.joblib>` to use non-default saved OVR artifact
-- `--soundscapes` to aggregate soundscape windows
-- `--full` to use full (non-reduced) feature matrices
-- `--val-idx-path <path.npy>` to remap validation indices to bag ids
-
-Outputs are saved in:
-
-- `artifacts/models/runs/<run-name>/experiments/<experiment-name>/inference/`
-- `<model-stem>_mil_<aggregation>_bag_ids.npy`
-- `<model-stem>_mil_<aggregation>_val_bag_ids.npy` (if `--val-idx-path` is provided)
-- `<model-stem>_mil_<aggregation>_val_bag_idx.npy` (if `--val-idx-path` is provided)
-- `<model-stem>_mil_<aggregation>_class_name_probas.npy`
-- `<model-stem>_mil_<aggregation>_primary_label_probas.npy`
-- `<model-stem>_mil_<aggregation>_class_name_preds.npy`
-- `<model-stem>_mil_<aggregation>_primary_label_preds.npy`
-- `<model-stem>_mil_<aggregation>_class_name_true.npy`
-- `<model-stem>_mil_<aggregation>_primary_label_true.npy`
-
----
-
-## Calibrate OVR models
-
-Calibration is a separate post-training step. It loads the pretrained OVR artifact,
-uses the saved validation fold from the experiment, and writes a calibrated copy
-without overwriting the original model.
-
-Requirements:
-
-- `training.train_val_split: true` in the experiment config used for training
-- calibration YAML stored in `artifacts/models/runs/experiments/<run-name>/`
-
-Example calibration configuration:
-
-`artifacts/models/runs/experiments/<run-name>/calibration_sigmoid.yaml`
-
-```bash
-uv run python -m birdclef_2026_ml calibrate-ovr-models-chunks \
-  --run-name <run-name> \
-  --experiment sgd_baseline \
-  --calibration calibration_sigmoid
-```
-
-Additional outputs are saved in the same experiment directory:
-
-- `<model-stem>_ovr_calibrated_<calibration-name>.joblib`
-- `<model-stem>_val_probas_calibrated_<calibration-name>.npy`
-- `<model-stem>_val_preds_calibrated_<calibration-name>.npy`
-- `calibration_config_source_<calibration-name>.txt`
-
-## Tune OVR thresholds
-
-Threshold tuning is a separate post-training step. It loads saved `.joblib` OVR
-artifacts, searches for per-class probability thresholds on the saved validation fold,
-maximizes the chosen score, and then saves new threshold-tuned artifacts.
-
-Requirements:
-
-- `training.train_val_split: true` in experiment config used for training
-
-Default score:
-
-- `macro_f1`
-
-Supported scores:
-
-- `macro_f1`
-- `micro_f1`
-- `weighted_f1`
-- `accuracy`
-- `balanced_accuracy`
-
-To tune the default saved dual artifact:
-
-```bash
-uv run python -m birdclef_2026_ml tune-ovr-thresholds \
-  --run-name <run-name> \
-  --experiment sgd_baseline \
-  --score macro_f1
-```
-
-To tune a calibrated artifact:
-
-```bash
-uv run python -m birdclef_2026_ml tune-ovr-thresholds \
-  --run-name <run-name> \
-  --experiment sgd_baseline \
-  --model-filename sgdclassifier_ovr_calibrated_calibration_sigmoid.joblib \
-  --score macro_f1
-```
-
-If the input `.joblib` contains `OneVsRestArtifacts`, pass the target:
-
-```bash
-uv run python -m birdclef_2026_ml tune-ovr-thresholds \
-  --run-name <run-name> \
-  --experiment sgd_baseline \
-  --model-filename some_single_target_model.joblib \
-  --target-name primary_label \
-  --score macro_f1
-```
-
-Outputs are saved in the same experiment directory:
-
-- `<input-model-stem>_threshold_tuned_<score>.joblib`
-- `<input-model-stem>_threshold_tuned_<score>_val_preds.npy`
-- `<input-model-stem>_threshold_tuned_<score>_val_probas.npy`
-- `<input-model-stem>_threshold_tuned_<score>_thresholds.npy`

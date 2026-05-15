@@ -1,0 +1,41 @@
+model:
+  type: SGDClassifier
+  params:
+    loss: log_loss
+    penalty: elasticnet
+    alpha: 1.0e-4
+    max_iter: 3000
+    learning_rate: optimal
+    average: true
+    random_state: 42
+
+training:
+  batch_size: 4096
+  epochs: 5
+  train_val_split: true
+  early_stopping: true
+  n_iter_no_change: 1
+  tol: 1.0e-4
+  scope: true
+
+second_stage:
+  enabled: true
+  n_jobs: -1
+  model:
+    type: ExplainableBoostingClassifier
+    params:
+      interactions: 0
+      learning_rate: 0.03
+      max_rounds: 500
+      max_bins: 256
+      validation_size: 0.0
+  augmentation:
+    include_clean_bags: true
+    include_soundscape_bags: true
+    synthetic_bag_multiplier: 2.0
+    max_mixture_size: 4
+    mixture_method: weighted
+    temporal_keep_ratio_min: 0.3
+    temporal_keep_ratio_max: 0.7
+    temporal_fill_value: prior
+    gaussian_noise_std: 0.03

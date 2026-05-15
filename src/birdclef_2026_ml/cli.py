@@ -24,16 +24,9 @@ from birdclef_2026_ml.processing.feature_dataset_builder import (
     build_soundscape_feature_memmap_artifacts,
     reduce_feature_memmap,
 )
-from birdclef_2026_ml.processing.memmap_dataset import load_memmap_dataset
 from birdclef_2026_ml.processing.preprocess import preprocess_datasets_for_models
 from birdclef_2026_ml.training.ovr_training import (
-    calibrate_and_save_ovr_models_chunks,
-    # tune_and_save_ovr_thresholds,
     train_and_save_ovr_models_chunks,
-)
-# from birdclef_2026_ml.training.mil import train_and_save_second_stage_mil_ovr
-from birdclef_2026_ml.training.ss_ovr_training import (
-    run_soundscape_oof_evaluation_and_training,
 )
 from birdclef_2026_ml.training.ss_second_stage import (
     build_mil_second_stage_clean_audio_data,
@@ -41,7 +34,6 @@ from birdclef_2026_ml.training.ss_second_stage import (
     fit_mil_second_stage_clean_audio,
     train_mil_second_stage_clean_audio,
     run_mil_second_stage_clean_audio_soundscape_inference,
-    # finetune_mil_second_stage_clean_audio_soundscape_oof,
     fit_second_stage_soundscapes_with_mil_proba,
 )
 
@@ -145,32 +137,6 @@ def _build_parser() -> argparse.ArgumentParser:
     parser_mil_clean_soundscape.add_argument("--experiment", type=str, required=True)
     parser_mil_clean_soundscape.add_argument("--model-filename", type=str, default=None)
 
-    # parser_mil_clean_soundscape_oof = subparsers.add_parser(
-    #     "run-mil-second-stage-clean-soundscape-oof",
-    #     help="Warm-start clean-audio second-stage models and score soundscape OOF.",
-    # )
-    # parser_mil_clean_soundscape_oof.add_argument("--run-name", type=str, required=True)
-    # parser_mil_clean_soundscape_oof.add_argument("--experiment", type=str, required=True)
-    # parser_mil_clean_soundscape_oof.add_argument("--model-filename", type=str, default=None)
-    # parser_mil_clean_soundscape_oof.add_argument("--n-splits", type=int, default=5)
-    # parser_mil_clean_soundscape_oof.add_argument("--random-state", type=int, default=42)
-    # parser_mil_clean_soundscape_oof.add_argument(
-    #     "--no-shuffle",
-    #     action="store_true",
-    #     help="Disable shuffle in soundscape OOF splits.",
-    # )
-    # parser_mil_clean_soundscape_oof.add_argument(
-    #     "--max-iter",
-    #     type=int,
-    #     default=200,
-    #     help="Max iterations for warm-start fine-tuning per fold.",
-    # )
-    # parser_mil_clean_soundscape_oof.add_argument(
-    #     "--full",
-    #     action="store_true",
-    #     help="Use full (non-reduced) soundscape matrices.",
-    # )
-
     parser_soundscape_mil_context = subparsers.add_parser(
         "run-soundscape-mil-context-oof",
         help="Train soundscape OOF model on P(bag), bag stats, and context features.",
@@ -210,60 +176,6 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Use full (non-reduced) soundscape matrices.",
     )
-
-    # parser_train_mil_second_stage = subparsers.add_parser(
-    #     "train-mil-second-stage",
-    #     help="Train primary_label second-stage EBM OVR on augmented MIL bag probabilities.",
-    # )
-    # parser_train_mil_second_stage.add_argument("--run-name", type=str, required=True)
-    # parser_train_mil_second_stage.add_argument("--experiment", type=str, required=True)
-    # parser_train_mil_second_stage.add_argument("--model-filename", type=str, default=None)
-    # parser_train_mil_second_stage.add_argument(
-    #     "--full",
-    #     action="store_true",
-    #     help="Use full (non-reduced) matrices when running stage-1 inference.",
-    # )
-
-    parser_soundscape_oof = subparsers.add_parser(
-        "run-soundscape-oof",
-        help="Run soundscape OOF calibration, threshold tuning, and final predictions.",
-    )
-    parser_soundscape_oof.add_argument("--run-name", type=str, required=True)
-    parser_soundscape_oof.add_argument("--experiment", type=str, required=True)
-    parser_soundscape_oof.add_argument("--calibration", type=str, default=None)
-    parser_soundscape_oof.add_argument("--model-filename", type=str, default=None)
-    parser_soundscape_oof.add_argument("--n-splits", type=int, default=5)
-    parser_soundscape_oof.add_argument("--random-state", type=int, default=42)
-    parser_soundscape_oof.add_argument("--max-rounds", type=int, default=2)
-    parser_soundscape_oof.add_argument(
-        "--full",
-        action="store_true",
-        help="Use full (non-reduced) soundscape feature matrices.",
-    )
-
-    parser_calibrate_ovr_models_chunks = subparsers.add_parser(
-        "calibrate-ovr-models-chunks",
-        help="Calibrate pretrained OVR models for one saved run and experiment.",
-    )
-    parser_calibrate_ovr_models_chunks.add_argument("--run-name", type=str, required=True)
-    parser_calibrate_ovr_models_chunks.add_argument("--experiment", type=str, required=True)
-    parser_calibrate_ovr_models_chunks.add_argument("--calibration", type=str, required=True)
-
-    parser_tune_ovr_thresholds = subparsers.add_parser(
-        "tune-ovr-thresholds",
-        help="Tune per-class decision thresholds for saved OVR artifacts.",
-    )
-    parser_tune_ovr_thresholds.add_argument("--run-name", type=str, required=True)
-    parser_tune_ovr_thresholds.add_argument("--experiment", type=str, required=True)
-    parser_tune_ovr_thresholds.add_argument("--score", type=str, default="macro_f1")
-    parser_tune_ovr_thresholds.add_argument("--model-filename", type=str, default=None)
-    parser_tune_ovr_thresholds.add_argument(
-        "--target-name",
-        type=str,
-        default="class_name",
-        choices=("class_name", "primary_label"),
-    )
-    parser_tune_ovr_thresholds.add_argument("--max-rounds", type=int, default=2)
 
     parser_run_ovr_inference = subparsers.add_parser(
         "run-ovr-inference",
@@ -380,14 +292,6 @@ def _build_parser() -> argparse.ArgumentParser:
     parser_mel.add_argument("--dataset", type=str, required=True, choices=DATASET_CHOICES)
     parser_mel.add_argument("--audio-stage", type=str, required=True, choices=STAGE_CHOICES)
 
-    # parser_pool_mel = subparsers.add_parser(
-    #     "pool-mel-features",
-    #     help="Pool precomputed mel spectrograms into global pooled median (required for profiles calculation).",
-    # )
-    # # parser_pool_mel.add_argument("--dataset", type=str, required=True, choices=DATASET_CHOICES)
-    # parser_pool_mel.add_argument("--input-kind", type=str, default="mel", choices=("mel",))
-    # parser_pool_mel.add_argument("--output-kind", type=str, default="pooled", choices=("pooled",))
-
     return parser
 
 
@@ -424,8 +328,6 @@ def _run_build_profiles(args, paths: ProjectPaths):
     np.save(profiles_path, profiles)
     np.save(species_ids_path, species_ids)
 
-    # paths.profiles_dir.mkdir(parents=True, exist_ok=True)
-    # profiles_path, species_ids_path = save_profiles(paths.profiles_dir, species_ids, profiles)
     print(f"Profiles saved to: {profiles_path}")
     print(f"Species ids saved to: {species_ids_path}")
 
@@ -477,18 +379,6 @@ def _run_extract_mel_spectograms(args, paths: ProjectPaths):
     )
 
 
-# def _run_pool_mel_features(args, paths: ProjectPaths):
-#     pipeline_cfg = PipelineConfig()
-#     df = pd.read_parquet(_dataset_frame(paths, args.dataset))
-
-#     save_pooled_features_from_mel_dir(
-#         df=df,
-#         input_mel_dir=_feature_dir(paths, args.dataset, args.input_kind),
-#         output_path=_feature_dir(paths, args.dataset, args.output_kind),
-#         pipeline_cfg=pipeline_cfg,
-#     )
-
-
 def _run_build_feature_matrices(args, paths: ProjectPaths):
     df = pd.read_parquet(_dataset_frame(paths, args.dataset))
     pipeline_cfg = load_pipeline_config(args.run_name)
@@ -529,44 +419,6 @@ def _run_reduce_feature_matrices(args, paths: ProjectPaths):
 
 def _run_train_ovr_models_chunks(args):
     train_and_save_ovr_models_chunks(args.run_name, args.experiment)
-
-
-def _run_soundscape_oof(args):
-    output_dir = run_soundscape_oof_evaluation_and_training(
-        run_name=args.run_name,
-        experiment_name=args.experiment,
-        calibration_name=args.calibration,
-        reduced=not args.full,
-        model_filename=args.model_filename,
-        n_splits=args.n_splits,
-        random_state=args.random_state,
-        max_rounds=args.max_rounds,
-    )
-    print(f"Soundscape OOF outputs saved to: {output_dir}")
-
-
-# def _run_train_mil_second_stage(args):
-#     output_dir = train_and_save_second_stage_mil_ovr(
-#         args.run_name,
-#         args.experiment,
-#         model_filename=args.model_filename,
-#         reduced=not args.full,
-#     )
-#     print(f"Second-stage MIL outputs saved to: {output_dir}")
-
-
-def _run_calibrate_ovr_models_chunks(args):
-    calibrate_and_save_ovr_models_chunks(
-        args.run_name,
-        args.experiment,
-        calibration_name=args.calibration,
-    )
-
-
-def _run_tune_ovr_thresholds(args):
-    raise NotImplementedError(
-        "tune-ovr-thresholds CLI is not wired in current codebase."
-    )
 
 
 def _run_ovr_inference(args):
@@ -638,20 +490,6 @@ def _run_mil_second_stage_clean_soundscape(args):
     print(f"MIL clean-audio soundscape inference saved to: {output_path}")
 
 
-# def _run_mil_second_stage_clean_soundscape_oof(args):
-#     output_path = finetune_mil_second_stage_clean_audio_soundscape_oof(
-#         args.run_name,
-#         args.experiment,
-#         model_filename=args.model_filename,
-#         reduced=not args.full,
-#         n_splits=args.n_splits,
-#         shuffle=not args.no_shuffle,
-#         random_state=args.random_state,
-#         max_iter=args.max_iter,
-#     )
-#     print(f"MIL clean-audio soundscape OOF saved to: {output_path}")
-
-
 def _run_soundscape_mil_context_oof(args, paths: ProjectPaths):
     soundscapes = pd.read_parquet(paths.soundscapes_processed)
     output_path = fit_second_stage_soundscapes_with_mil_proba(
@@ -717,18 +555,6 @@ def main(argv=None) -> int:
     if args.command == "train-ovr-models-chunks":
         _run_train_ovr_models_chunks(args)
         return 0
-    # if args.command == "train-mil-second-stage":
-    #     _run_train_mil_second_stage(args)
-    #     return 0
-    if args.command == "run-soundscape-oof":
-        _run_soundscape_oof(args)
-        return 0
-    if args.command == "calibrate-ovr-models-chunks":
-        _run_calibrate_ovr_models_chunks(args)
-        return 0
-    if args.command == "tune-ovr-thresholds":
-        _run_tune_ovr_thresholds(args)
-        return 0
     if args.command == "run-ovr-inference":
         _run_ovr_inference(args)
         return 0
@@ -747,9 +573,6 @@ def main(argv=None) -> int:
     if args.command == "run-mil-second-stage-clean-soundscape":
         _run_mil_second_stage_clean_soundscape(args)
         return 0
-    # if args.command == "run-mil-second-stage-clean-soundscape-oof":
-    #     _run_mil_second_stage_clean_soundscape_oof(args)
-    #     return 0
     if args.command == "run-soundscape-mil-context-oof":
         _run_soundscape_mil_context_oof(args, paths)
         return 0

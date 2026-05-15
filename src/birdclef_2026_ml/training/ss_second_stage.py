@@ -30,8 +30,6 @@ from birdclef_2026_ml.models.mil import (
 from birdclef_2026_ml.configs import (
     load_experiment_config,
     artifact_stem,
-    load_calibration_config,
-    build_calibration_config
 )
 from birdclef_2026_ml.processing.memmap_dataset import (
     load_memmap_dataset,
@@ -658,119 +656,6 @@ def run_mil_second_stage_clean_audio_soundscape_inference(
     output_path = clean_dir / f"{output_stem}_mil_second_stage_primary_soundscape_proba.npy"
     np.save(output_path, proba)
     return output_path
-
-
-# def finetune_mil_second_stage_clean_audio_soundscape_oof(
-#     run_name: str,
-#     experiment_name: str,
-#     *,
-#     model_filename: str | None = None,
-#     reduced: bool = True,
-#     n_splits: int = 5,
-#     shuffle: bool = True,
-#     random_state: int = 42,
-#     max_iter: int | None = 200,
-# ) -> Path:
-#     paths = load_project_paths()
-#     experiment_cfg, _ = load_experiment_config(run_name, experiment_name)
-#     experiment_dir = paths.experiment_dir(run_name, experiment_name)
-#     clean_dir = experiment_dir / "clean_audio"
-
-#     stem = artifact_stem(experiment_cfg)
-#     output_stem = Path(model_filename or f"{stem}_ovr.joblib").stem
-#     artifact_path = clean_dir / f"{output_stem}_mil_second_stage_primary.joblib"
-#     if not artifact_path.exists():
-#         raise FileNotFoundError(f"Second-stage artifacts not found: {artifact_path}")
-
-#     artifacts = joblib.load(artifact_path)
-#     if not isinstance(artifacts, MILSecondStageCleanAudioArtifacts):
-#         raise TypeError("Expected MILSecondStageCleanAudioArtifacts")
-
-#     dataset = load_memmap_dataset(run_name, reduced=reduced, soundscape=True)
-#     if dataset.bags_meta is None:
-#         raise ValueError("Soundscape fine-tuning requires MIL bag metadata")
-#     bag_meta_arr = np.asarray(dataset.bags_meta)
-#     if bag_meta_arr.ndim >= 2 and bag_meta_arr.shape[1] >= 1:
-#         bag_ids = np.asarray(bag_meta_arr[:, 0], dtype=int)
-#     elif bag_meta_arr.ndim == 1:
-#         bag_ids = np.asarray(bag_meta_arr, dtype=int)
-#     else:
-#         raise ValueError("Soundscape bag metadata must be 1D or 2D with bag ids in column 0")
-
-#     ordered_bag_ids, _ = bag_order(bag_ids)
-#     bag_filename_map: dict[int, str] = {}
-#     for bag_id, filename in zip(bag_ids, np.asarray(dataset.filenames)):
-#         bag_id_int = int(bag_id)
-#         if bag_id_int not in bag_filename_map:
-#             bag_filename_map[bag_id_int] = str(filename)
-#     bag_filenames = np.asarray(
-#         [bag_filename_map[int(bag_id)] for bag_id in ordered_bag_ids], dtype=object
-#     )
-
-#     features_path = clean_dir / "train_bag_features_primary_soundscape.npy"
-#     if not features_path.exists():
-#         raise FileNotFoundError(f"Soundscape bag features not found: {features_path}")
-#     bag_features = np.load(features_path, mmap_mode="r")
-
-#     n_classes = len(artifacts.label_encoder.classes_)
-#     if bag_features.shape[0] != n_classes:
-#         raise ValueError(
-#             "Soundscape bag feature count does not match label encoder classes"
-#         )
-#     if bag_features.shape[1] != ordered_bag_ids.shape[0]:
-#         raise ValueError("Soundscape bag features do not align with bag ids")
-
-#     if dataset.y.ndim == 3:
-#         y_primary = np.asarray(dataset.y[:, 1, :], dtype=int)
-#     elif dataset.y.ndim == 2:
-#         y_primary = np.asarray(dataset.y, dtype=int)
-#     else:
-#         raise ValueError("Soundscape labels must be 2D or 3D")
-#     y_primary = y_primary[:, :n_classes]
-#     bag_targets = collapse_bag_multilabel_targets(bag_ids, y_primary)
-
-#     splits = iter_soundscapes_oof_splits(
-#         y=bag_targets,
-#         filenames=bag_filenames,
-#         n_splits=n_splits,
-#         shuffle=shuffle,
-#         random_state=random_state,
-#     )
-
-#     oof_proba = np.zeros((ordered_bag_ids.shape[0], n_classes), dtype=float)
-#     for fold_id, (train_idx, val_idx) in enumerate(splits):
-#         print(f"[MIL clean] soundscape fold {fold_id + 1}/{len(splits)}")
-#         if val_idx.size == 0:
-#             continue
-
-#         for class_id in range(n_classes):
-#             estimator = artifacts.estimators[class_id]
-#             fallback_prob = artifacts.fallback_positive_probs[class_id]
-#             y_train = bag_targets[train_idx, class_id]
-#             if estimator is None or np.unique(y_train).size < 2:
-#                 if fallback_prob is None:
-#                     fallback_prob = float(np.mean(y_train)) if y_train.size else 0.0
-#                 oof_proba[val_idx, class_id] = float(fallback_prob)
-#                 continue
-
-#             estimator_fold = copy.deepcopy(estimator)
-#             model = estimator_fold.named_steps.get("model")
-#             if isinstance(model, LogisticRegression):
-#                 model.set_params(warm_start=True)
-#                 if max_iter is not None:
-#                     model.set_params(max_iter=max_iter)
-
-#             x_train = np.asarray(bag_features[class_id, train_idx], dtype=float)
-#             x_val = np.asarray(bag_features[class_id, val_idx], dtype=float)
-#             estimator_fold.fit(x_train, y_train)
-#             pred = estimator_fold.predict_proba(x_val)
-#             classes = estimator_fold.named_steps["model"].classes_
-#             positive_col = int(np.flatnonzero(np.asarray(classes) == 1)[0])
-#             oof_proba[val_idx, class_id] = pred[:, positive_col]
-
-#     output_path = clean_dir / f"{output_stem}_mil_second_stage_primary_soundscape_oof.npy"
-#     np.save(output_path, oof_proba)
-#     return output_path
 
 
 def fit_mil_second_stage_clean_audio(
