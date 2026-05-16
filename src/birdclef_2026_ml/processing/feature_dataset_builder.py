@@ -209,7 +209,7 @@ def reduce_feature_vector(
 ) -> tuple[np.ndarray, list[str]]:
     """
     Reduce feature matrix:
-    - drop *_std
+    - drop *_std for mel spectrogram families only
     - collapse mel/mel_delta/mel_delta2 dims from 128 -> target_mel_bins with median
     """
     print(
@@ -217,11 +217,19 @@ def reduce_feature_vector(
         f"target_mel_bins={target_mel_bins}"
     )
     feature_names_list = [str(name) for name in feature_names]
-    keep_mask = np.array([not name.endswith("_std") for name in feature_names_list], dtype=bool)
+    mel_std_prefixes = (
+        "mel_spectrogram_",
+        "mel_spectrogram_delta_",
+        "mel_spectrogram_delta2_",
+    )
+    keep_mask = np.array(
+        [not (name.endswith("_std") and name.startswith(mel_std_prefixes)) for name in feature_names_list],
+        dtype=bool,
+    )
     reduced_names = [name for name, keep in zip(feature_names_list, keep_mask) if keep]
     dropped = int(np.size(keep_mask) - int(np.sum(keep_mask)))
     print(
-        f"[reduce_feature_vector] drop *_std removed={dropped} kept={len(reduced_names)}"
+        f"[reduce_feature_vector] drop mel *_std removed={dropped} kept={len(reduced_names)}"
     )
 
     if batch_rows is None and isinstance(X, np.memmap):
@@ -319,7 +327,15 @@ def reduce_feature_memmap(run_path: Path, target_mel_bins: int = 32, soundscapes
     y_shape = y.shape
 
     feature_names_list = [str(name) for name in feature_names]
-    keep_mask = np.array([not name.endswith("_std") for name in feature_names_list], dtype=bool)
+    mel_std_prefixes = (
+        "mel_spectrogram_",
+        "mel_spectrogram_delta_",
+        "mel_spectrogram_delta2_",
+    )
+    keep_mask = np.array(
+        [not (name.endswith("_std") and name.startswith(mel_std_prefixes)) for name in feature_names_list],
+        dtype=bool,
+    )
     reduced_names = [name for name, keep in zip(feature_names_list, keep_mask) if keep]
     for prefix in ("mel_spectrogram_", "mel_spectrogram_delta_", "mel_spectrogram_delta2_"):
         _, keep_names, _, group_names = _build_mel_reduction_step(

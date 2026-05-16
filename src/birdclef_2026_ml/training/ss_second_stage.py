@@ -139,7 +139,7 @@ def fit_second_stage_soundscapes(
             # ])
             sample_weight = compute_sample_weight("balanced", y_train)
             pipe = XGBClassifier(
-                n_estimators=300,
+                n_estimators=100,
                 max_depth=3
             )
             pipe_fit = pipe.fit(x_train, y_train, sample_weight=sample_weight)
@@ -261,7 +261,7 @@ def fit_second_stage_soundscapes_with_mil_proba(
             )
 
             pipe = XGBClassifier(
-                n_estimators=300,
+                n_estimators=100,
                 max_depth=3
             )
             sample_weight = compute_sample_weight("balanced", y_train)
