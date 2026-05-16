@@ -13,7 +13,6 @@ def spectral_gating_snr(
     # 1. STFT
     S = librosa.stft(y, n_fft=config.n_fft, hop_length=config.hop_length)
     magnitude = np.abs(S)
-    phase = np.exp(1j * np.angle(S))
 
     # 2. Frame energy (RMS proxy)
     frame_energy = np.mean(magnitude**2, axis=0)
@@ -26,7 +25,7 @@ def spectral_gating_snr(
     if np.sum(noise_frames) < 5:
         return y, S, None, None
 
-    # 4. Frequency-dependent noise estimate N(t)
+    # 4. Frequency-dependent noise estimate N(f)
     noise_spectrum = np.median(
         magnitude[:, noise_frames],
         axis=1,
