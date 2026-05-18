@@ -15,23 +15,43 @@ def _estimate_windows_per_chunk(config: PipelineConfig) -> int:
 
 
 def assign_bag_ids(window_ids: Iterable[int], run_name: str) -> np.ndarray:
-    """Assign bag ids for MIL windows using the run pipeline config."""
+    """Assign MIL bag ids with fixed bag size and enforced full last bag via backward overlap."""
     config = load_pipeline_config(run_name)
-    windows_per_chunk = _estimate_windows_per_chunk(config)
+    K = _estimate_windows_per_chunk(config)
+
     window_ids = np.asarray(list(window_ids), dtype=int).reshape(-1)
-    if window_ids.size == 0:
+    n = len(window_ids)
+
+    if n == 0:
         return np.empty(0, dtype=int)
 
-    bag_ids = np.empty_like(window_ids, dtype=int)
-    bag_id = 0
-    count_in_bag = 0
+    bag_ids = np.empty(n, dtype=int)
+    if n <= K:
+        bag_ids[:] = 0
+        return bag_ids
 
-    for idx, window_id in enumerate(window_ids):
-        if count_in_bag > 0 and (window_id == 0 or count_in_bag >= windows_per_chunk):
-            bag_id += 1
-            count_in_bag = 0
-        bag_ids[idx] = bag_id
-        count_in_bag += 1
+    # number of full bags
+    n_full = n // K
+    remainder = n % K
+
+    # if perfectly divisible -> standard grouping
+    if remainder == 0:
+        for i in range(n):
+            bag_ids[i] = i // K
+        return bag_ids
+
+    # last bag must be full -> shift start backward
+    n_bags = n_full + 1
+
+    # assign all full bags normally
+    for i in range(n_full * K):
+        bag_ids[i] = i // K
+
+    # build last bag with overlap
+    start_last = n - K
+
+    for i in range(start_last, n):
+        bag_ids[i] = n_bags - 1
 
     return bag_ids
 

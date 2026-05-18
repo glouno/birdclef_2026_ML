@@ -39,8 +39,8 @@ PROJECT_ROOT=/abs/path/to/repo uv run python -m birdclef_2026_ml ...
 6. Define the run configuration (`FeatureConfig`, `ChunkConfig`, `MILConfig`) and extract all features, aggregating them per time chunk.
 7. [Optional] Reduce the number of features, e.g., by reducing the dimensionality of the mel-spectrogram from 128 to 32 mels.
 8. Train an `SGDClassifier` model to predict both `class_name` and `primary_label` (hierarchical approach).
-9. Run OVR inference (probabilities will be used afterwards)
-10. Second-stage model based on model variant
+9. Run OVR inference (probabilities will be used afterwards).
+10. Run exactly one second-stage path (soundscape context or MIL).
 
 ### Commands
 
@@ -227,9 +227,7 @@ Outputs are saved in:
 When `--soundscapes` is used, outputs are suffixed with `_soundscape` before the
 `_class_name_*` or `_primary_label_*` suffixes.
 
-EITHER
-
-##### 10. Run soundscape second-stage (context features, no MIL)
+##### 10A. Soundscape second-stage (context features, no MIL)
 
 Trains a soundscape OOF model using stage-1 class/primary probabilities, their
 soft-combined probabilities, and context features (site/time).
@@ -253,9 +251,7 @@ Outputs are saved in:
 - `oof_proba.npy`
 - `combined_proba.npy`
 
-OR
-
-##### 10. Train MIL Second Stage on Clean-Audio Bags
+##### 10B. MIL second stage on clean-audio bags
 
 Train command:
 

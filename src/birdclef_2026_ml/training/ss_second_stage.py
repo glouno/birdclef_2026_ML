@@ -16,6 +16,7 @@ from xgboost import XGBClassifier
 
 from birdclef_2026_ml.feature_engineering.soundscapes import build_soundscape_context_features
 from birdclef_2026_ml.processing.data_split import iter_soundscapes_oof_splits
+from birdclef_2026_ml.models.hierarchical import combine_soft_proba
 from birdclef_2026_ml.paths import load_project_paths
 from birdclef_2026_ml.models.artifacts import (
     DualOneVsRestArtifacts,
@@ -78,14 +79,12 @@ def fit_second_stage_soundscapes(
         dtype=int,
     )
     n_primary = int(primary_proba.shape[1])
-    if primary_to_class.shape[0] < n_primary:
-        raise ValueError("Primary-to-class mapping is shorter than primary labels")
-    primary_to_class = primary_to_class[:n_primary]
 
     parent_proba = np.asarray(class_proba[:, primary_to_class], dtype=float)
     primary_proba = np.asarray(primary_proba[:, :n_primary], dtype=float)
-    combined_proba = primary_proba * parent_proba
+    combined_proba = combine_soft_proba(class_proba, primary_proba, primary_to_class)
 
+    print(np.all(primary_proba == 0, axis=0).any())
     if ss_context_features.shape[0] != primary_proba.shape[0]:
         raise ValueError("Context features do not align with soundscape rows")
 
@@ -113,7 +112,7 @@ def fit_second_stage_soundscapes(
         for class_id in range(n_primary):
             y_train = y_primary[train_idx, class_id]
             if np.unique(y_train).size < 2:
-                oof_proba[val_idx, class_id] = primary_proba[val_idx, class_id]
+                oof_proba[val_idx, class_id] = combined_proba[val_idx, class_id]
                 continue
 
             x_train = np.column_stack([
@@ -129,14 +128,6 @@ def fit_second_stage_soundscapes(
                 ss_context_features[val_idx],
             ])
 
-            # pipe = Pipeline([
-            #     ("scaler", StandardScaler()),
-            #     ("model", LogisticRegression(
-            #         max_iter=1000,
-            #         solver="liblinear",
-            #         class_weight="balanced",
-            #     ))
-            # ])
             sample_weight = compute_sample_weight("balanced", y_train)
             pipe = XGBClassifier(
                 n_estimators=100,
@@ -145,7 +136,6 @@ def fit_second_stage_soundscapes(
             pipe_fit = pipe.fit(x_train, y_train, sample_weight=sample_weight)
             pred_proba = pipe_fit.predict_proba(x_val)
             positive_col = int(
-                # np.flatnonzero(pipe_fit.named_steps["model"].classes_ == 1)[0]
                 np.flatnonzero(pipe_fit.classes_ == 1)[0]
             )
             oof_proba[val_idx, class_id] = pred_proba[:, positive_col]
@@ -239,6 +229,7 @@ def fit_second_stage_soundscapes_with_mil_proba(
     )
 
     base_features = np.concatenate([mil_proba, ss_context_features], axis=1)
+
     oof_proba = mil_proba.copy()
     for fold_id, (train_idx, val_idx) in enumerate(splits):
         print(f"[MIL+context] fold {fold_id + 1}/{len(splits)}")
@@ -259,7 +250,6 @@ def fit_second_stage_soundscapes_with_mil_proba(
                 [base_features[val_idx], bag_features[class_id, val_idx]],
                 axis=1,
             )
-
             pipe = XGBClassifier(
                 n_estimators=100,
                 max_depth=3

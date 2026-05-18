@@ -60,6 +60,7 @@ def load_memmap_dataset(run_name: str, reduced: bool = True, soundscape: bool = 
     bags_meta_entry = metadata.get("bags_meta")
     if isinstance(bags_meta_entry, dict):
         bags_meta_path = run_path / str(bags_meta_entry.get("path", f"bags_meta{suffix}.npy"))
+        print(bags_meta_path)
         if bags_meta_path.exists():
             bags_meta = np.load(bags_meta_path, allow_pickle=True)
 
@@ -79,10 +80,10 @@ def load_memmap_dataset(run_name: str, reduced: bool = True, soundscape: bool = 
     #         else np.array([], dtype=object)
     #     )
 
-    # if bags_meta is None:
-    #     bags_meta_path = run_path / f"bags_meta{suffix}.npy"
-    #     if bags_meta_path.exists():
-    #         bags_meta = np.load(bags_meta_path, allow_pickle=True)
+    if bags_meta is None:
+        bags_meta_path = run_path / f"bags_meta{suffix}.npy"
+        if bags_meta_path.exists():
+            bags_meta = np.load(bags_meta_path, allow_pickle=True)
 
     X = np.memmap(X_path, dtype=X_dtype, mode="r", shape=X_shape)
     y = np.memmap(y_path, dtype=y_dtype, mode="r", shape=y_shape)

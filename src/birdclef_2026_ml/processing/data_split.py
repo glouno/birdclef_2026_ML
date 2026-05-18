@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable
 from typing import Any, cast
 
 import numpy as np
 import pandas as pd
-# from sklearn.model_selection import GroupShuffleSplit
 from sklearn.preprocessing import MultiLabelBinarizer
 
-# try:
 from iterstrat.ml_stratifiers import MultilabelStratifiedKFold, MultilabelStratifiedShuffleSplit
 
 from birdclef_2026_ml.paths import load_project_paths
@@ -80,23 +78,12 @@ def _split_train_val_grouped_by_filename(
     mlb = MultiLabelBinarizer()
     y_grouped = mlb.fit_transform(grouped["labels"])
     x_grouped = grouped.index.to_numpy().reshape(-1, 1)
-
-    # try:
-    #     if MultilabelStratifiedShuffleSplit is None:
-    #         raise ValueError("iterstrat is not installed")
     splitter = MultilabelStratifiedShuffleSplit(
         n_splits=1,
         test_size=cast(Any, test_size),
         random_state=random_state,
     )
     group_train_idx, group_val_idx = next(splitter.split(x_grouped, cast(Any, y_grouped)))
-    # except ValueError:
-    #     # Fallback when stratified multilabel constraints cannot be satisfied
-    #     # or optional dependency `iterstrat` is unavailable.
-    #     splitter = GroupShuffleSplit(n_splits=1, test_size=test_size, random_state=random_state)
-    #     group_ids = np.arange(len(grouped))
-    #     group_train_idx, group_val_idx = next(splitter.split(group_ids, groups=group_ids))
-
     train_row_indices = np.sort(
         np.concatenate(grouped.iloc[group_train_idx]["row_idx"].to_numpy())
     )
