@@ -29,5 +29,5 @@ datasets:
     soundscapes: metadata/train_soundscapes_labels.parquet
 
 configs:
-  spectral_gating: data/configs/spectral_gating.json
-  features: data/configs/features/feature_config.json
+  spectral_gating: configs/spectral_gating.json
+  features: configs/features/feature_config.json

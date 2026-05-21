@@ -2,18 +2,24 @@
 
 Repository for BirdCLEF+ 2026 using a classical (non-deep-learning) machine learning pipeline only.
 
-## Project Layout
+## Repository Layout
 
-- `data/raw`: Original competition metadata and audio files
-- `data/interim`: Transient audio and cache artifacts
-- `data/processed`: Model-ready metadata and stable derived assets
-- `artifacts/models/runs`: Feature matrices, trained models, and predictions
-- `artifacts/models/runs/experiments`: Experiment YAMLs and trained experiment outputs
-- `configs/project.yaml`: Central path configuration
+- `configs/`: Path config plus reusable JSON configs (`project.yaml`, `spectral_gating.json`, `features/feature_config.json`)
+- `src/birdclef_2026_ml/`: Core library code (audio, feature_engineering, processing, training, inference, notebooks helpers)
+- `notebooks/`: Analysis/evaluation notebooks; rendered visuals in `notebooks/plots/`
+- `data/`: Raw, interim, and processed datasets (ignored by git)
+- `artifacts/models/runs/`: Run artifacts (memmaps, models, predictions)
+- `artifacts/models/runs/experiments/`: Pipeline and experiment YAML configs
+- `tikz/`: LaTeX/TikZ figures and diagrams
+- `reports/`: Exported reports and figures
+- `main.py`: CLI entrypoint shim
+- `pyproject.toml` and `uv.lock`: Dependency and tooling metadata
+- `.env.example`: Environment variable template
 
 ## Path and Config Management
 
 All project paths are resolved from [`configs/project.yaml`](configs/project.yaml).
+Core JSON configs live in `configs/spectral_gating.json` and `configs/features/feature_config.json`.
 
 To override the config file:
 
@@ -24,7 +30,7 @@ BIRDCLEF_CONFIG=/abs/path/to/project.yaml uv run python -m birdclef_2026_ml ...
 To override the project root:
 
 ```bash
-PROJECT_ROOT=/abs/path/to/repo uv run python -m birdclef_2026_ml ...
+DATA_ROOT=/abs/path/to/repo uv run python -m birdclef_2026_ml ...
 ```
 
 ## Preprocess metadata

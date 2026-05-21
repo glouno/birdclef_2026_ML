@@ -1,0 +1,19 @@
+{
+  "sr": 32000,
+  "n_fft": 1024,
+  "hop_length": 512,
+  "roll_percent": 0.85,
+  "n_mels": 128,
+  "include_mel_spectrogram": true,
+  "include_delta": true,
+  "include_delta2": true,
+  "include_spectral": true,
+  "include_energy": true,
+  "include_texture": true,
+  "texture_downsample_freq_bins": 32,
+  "texture_quant_levels": 8,
+  "texture_patch_frames": 9,
+  "lbp_n_bins": 8,
+  "event_window_frames": 9,
+  "event_threshold_std": 1.0
+}
