@@ -2,6 +2,31 @@
 
 Repository for BirdCLEF+ 2026 using a classical (non-deep-learning) machine learning pipeline only.
 
+We combine audio features and species-specific frequency profiles with hierarchical
+one-vs-rest classifiers, then use soundscape context or multiple-instance learning
+(MIL) to handle recordings containing several species.
+
+By [Paul Béglin](https://github.com/glouno) and [BshKatrin](https://github.com/BshKatrin).
+See the [project report](rapport.pdf) for experiments, results, and limitations.
+
+## Setup
+
+Requires **Python 3.13+** and [uv](https://docs.astral.sh/uv/). From the repository root:
+
+```bash
+uv sync
+```
+
+Download the [BirdCLEF+ 2026 competition data](https://www.kaggle.com/competitions/birdclef-2026/data)
+separately and place `train.csv`, `train_soundscapes_labels.csv`, `taxonomy.csv`,
+`sample_submission.csv`, `train_audio/`, and `train_soundscapes/` under `data/raw/`.
+Paths can be changed in `configs/project.yaml`.
+
+Two example runs are included: [overlapping chunks](artifacts/models/runs/experiments/run_chunks_overlap/pipeline.yaml)
+and [MIL bags](artifacts/models/runs/experiments/run_mil/pipeline.yaml), each with an
+`sgd_baseline.yaml` experiment. Use `run_chunks_overlap` or `run_mil` for `<run-name>`
+in the commands below.
+
 ## Project Layout
 
 - `data/raw`: Original competition metadata and audio files
@@ -37,7 +62,7 @@ PROJECT_ROOT=/abs/path/to/repo uv run python -m birdclef_2026_ml ...
 4. Compute mel-spectrograms without time pooling. This accelerates the feature-building pipeline by allowing you to slice over time and experiment with different chunk durations. All other extracted audio features are computed from these mel-spectrograms.
 5. Calculate `primary_label` profiles (the idea is that different species operate at different frequencies).
 6. Define the run configuration (`FeatureConfig`, `ChunkConfig`, `MILConfig`) and extract all features, aggregating them per time chunk.
-7. [Optional] Reduce the number of features, e.g., by reducing the dimensionality of the mel-spectrogram from 128 to 32 mels.
+7. Reduce the number of features, e.g., by reducing the dimensionality of the mel-spectrogram from 128 to 32 mels. The training command below expects reduced matrices.
 8. Train an `SGDClassifier` model to predict both `class_name` and `primary_label` (hierarchical approach).
 9. Run OVR inference (probabilities will be used afterwards).
 10. Run exactly one second-stage path (soundscape context or MIL).
@@ -131,13 +156,14 @@ Soundscapes:
 uv run python -m birdclef_2026_ml build-feature-matrices \
   --dataset soundscapes \
   --feature-kind mel \
-  --run-name \
+  --run-name <run-name> \
   --soundscapes
 ```
 
-Run artifacts are stored under `artifacts/models/runs/<run-name>`.
-Soundscape outputs are suffixed with `_soundscape` (for example, `X_soundscape.dat`,
-`y_soundscape.dat`, and `feature_names_soundscape.npy`).
+Feature matrices are stored under `artifacts/models/runs/<run-name>/data/full/`.
+Soundscape outputs are suffixed with `_soundscape` (for example, `X_soundscape.dat`
+and `y_soundscape.dat`). Shapes, dtypes, feature names, and file IDs are recorded
+in `metadata.json` or `metadata_soundscape.json`.
 MIL runs also write `bags_meta.npy`, where each row stores `[bag_id, chunk_id_within_bag]`.
 Soundscape MIL runs write `bags_meta_soundscape.npy`.
 
@@ -151,7 +177,11 @@ The derived feature families include:
 - `glcm_*`
 - `lbp_hist`
 
-##### 7. [Optional] Reduce the Number of Features
+##### 7. Reduce the Number of Features
+
+The current training CLI loads reduced matrices by default, so run this step
+before training. Reduce soundscape matrices too when using the default inference
+and second-stage commands.
 
 Train:
 
@@ -170,7 +200,9 @@ uv run python -m birdclef_2026_ml reduce-feature-matrices \
   --soundscapes
 ```
 
-This writes reduced copies suffixed with `_reduced` in the same run directory:
+This writes reduced matrices and metadata under
+`artifacts/models/runs/<run-name>/data/reduced/`, using the same filenames as the
+full matrices.
 
 ##### 8. Train an `SGDClassifier` Model to Predict Both `class_name` and `primary_label` (Hierarchical Approach)
 
@@ -220,8 +252,7 @@ Outputs are saved in:
 
 - `artifacts/models/runs/<run-name>/experiments/<experiment-name>/inference/`
 - `<model-stem>_class_name_probas.dat`, `<model-stem>_primary_label_probas.dat`
-- `<model-stem>_class_name_probas_shape.npy`, `<model-stem>_class_name_probas_dtype.npy`
-- `<model-stem>_primary_label_probas_shape.npy`, `<model-stem>_primary_label_probas_dtype.npy`
+- `metadata.json`, containing the probability arrays' shapes and dtypes
 - `<model-stem>_class_name_preds.npy`, `<model-stem>_primary_label_preds.npy`
 
 When `--soundscapes` is used, outputs are suffixed with `_soundscape` before the
